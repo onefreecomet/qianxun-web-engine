@@ -91,6 +91,8 @@ class _BatchRunnable:
             slot = scheduler._sim_slots.acquire(timeout=0.5)
         if not slot:
             return result  # stop 且无名额
+        with scheduler._lock:
+            scheduler._active_slots += 1
 
         try:
             if scheduler._stop_event.is_set():
@@ -264,6 +266,8 @@ class _BatchRunnable:
                     scheduler._emit("sim_failed", {"sim_id": rec["sim_id"], "error": str(msg), "batch_idx": self.batch_idx})
                     result.failed += 1
         finally:
+            with scheduler._lock:
+                scheduler._active_slots = max(0, scheduler._active_slots - 1)
             scheduler._sim_slots.release()  # 释放名额
             # batch_done 放 finally：提前 return / 异常路径也保证事件完整
             scheduler._emit("batch_done", {
@@ -330,6 +334,8 @@ class BatchScheduler:
         self.rate_limit_reset_at: float | None = None
         # v28：最近一次 /simulations 提交响应头的每日回测配额（真实值，插件同款）
         self.sim_quota: dict | None = None
+        # 实时在飞批次/已用槽计数：acquire 名额时 +1，release 时 -1（web 并发卡实时显示用）
+        self._active_slots: int = 0
 
     def _emit(self, event: str, payload: dict) -> None:
         try:

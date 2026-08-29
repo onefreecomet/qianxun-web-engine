@@ -1,4 +1,4 @@
-"""千寻 web 桌面模式（v80.2）—— pywebview 套壳启动器。
+"""千寻 web 桌面模式（v81）—— pywebview 套壳启动器。
 
 用法：
     python run_native.py
@@ -69,7 +69,7 @@ def main() -> None:
 
     url = f"http://127.0.0.1:{port}/#sec-sync"
     window = webview.create_window(
-        title=f"千寻 web · v80.2 · :{port}",
+        title=f"千寻 web · v81 · :{port}",
         url=url,
         width=1480,
         height=920,

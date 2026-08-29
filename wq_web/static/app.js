@@ -1,4 +1,4 @@
-// 千寻 web v80.2 —— 客户端逻辑（无任何外部依赖）
+// 千寻 web v81 —— 客户端逻辑（无任何外部依赖）
 
 // ====== State ======
 const state = {
@@ -19,6 +19,17 @@ const fmtSharpe = (v) => {
   return `<span class="sharpe-zero">0.00</span>`;
 };
 const fmtBps = (v) => v == null ? '—' : (Number(v) * 10000).toFixed(1);
+// 把 UTC 时间戳转成北京时间（UTC+8）显示，避免直接截 UTC 字符串
+const fmtCST = (iso, withSec = false) => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;            // 解析失败原样返回
+  d.setTime(d.getTime() + 8 * 3600 * 1000);       // 推到东八区
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} `
+       + `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`
+       + (withSec ? `:${p(d.getUTCSeconds())}` : '');
+};
 
 function toast(msg, type = '') {
   const t = $('toast');
@@ -161,6 +172,32 @@ setInterval(refreshQuota, 60000);
 setInterval(renderQuota, 1000);
 refreshQuota();
 
+// 实时回测并发状态（在飞批次 / 已用槽 / 限流）
+async function refreshSchedulerState() {
+  try {
+    const r = await api('/api/scheduler/state');
+    if (!r.ok) return;
+    $('liveBatches').textContent = r.active_batches;
+    $('liveConcurrent').textContent = r.concurrent;
+    $('liveSlotsUsed').textContent = r.slots_used;
+    $('liveSlotsTotal').textContent = r.sim_slots;
+    const pct = r.sim_slots > 0 ? Math.min(100, Math.round(r.slots_used / r.sim_slots * 100)) : 0;
+    const bar = $('liveSlotsBar');
+    if (bar) bar.style.width = pct + '%';
+    const chip = $('liveRate');
+    const txt = $('liveRateText');
+    if (r.rate_limited) {
+      chip.classList.add('limited');
+      txt.textContent = `限流 ${r.rate_limit_reset_sec}s`;
+    } else {
+      chip.classList.remove('limited');
+      txt.textContent = r.running ? '运行中' : '空闲';
+    }
+  } catch (e) { /* 静默：实时状态失败不干扰主流程 */ }
+}
+setInterval(refreshSchedulerState, 1500);
+refreshSchedulerState();
+
 // ====== Batches ======
 async function loadBatches() {
   try {
@@ -189,7 +226,7 @@ function renderBatchList() {
           <span class="status-badge status-${b.status}">${b.status}</span>
         </div>
         <div class="batch-meta">${b.region || '—'} · ${b.expression_count || 0} 条 · ${b.producer || ''}</div>
-        <div class="batch-meta">${(b.created_at || '').slice(0, 16).replace('T', ' ')}</div>
+        <div class="batch-meta">${fmtCST(b.created_at)}</div>
         ${total > 0 ? `
           <div class="progress-bar"><div class="progress-bar-fill ${cls}" style="width:${pct.toFixed(1)}%"></div></div>
           <div class="batch-meta" style="margin-top:4px">${done}/${total} (${pct.toFixed(0)}%)</div>
@@ -232,7 +269,7 @@ async function loadBatchDetail(batchNo) {
           <div><span>区域</span><span style="font-size:14px">${batch.region || '—'}</span></div>
           <div><span>数据集</span><span style="font-size:14px">${batch.dataset_id || '—'}</span></div>
           <div><span>表达式数</span><span style="font-size:14px">${batch.expression_count || 0}</span></div>
-          <div><span>创建时间</span><span style="font-size:13px">${(batch.created_at || '').slice(0, 16).replace('T', ' ')}</span></div>
+          <div><span>创建时间</span><span style="font-size:13px">${fmtCST(batch.created_at)}</span></div>
           <div><span>备注</span><span style="font-size:13px">${batch.note || '—'}</span></div>
         </div>
       </div>

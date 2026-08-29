@@ -1,10 +1,10 @@
-"""千寻 web 版（v80.2）——FastAPI 后端。
+"""千寻 web 版（v81）——FastAPI 后端。
 
 定位：v66 GUI 后端 + MCP Server 的 web 形态。只暴露两件事
   1. AI 批次（list / create / detail / live progress）
   2. Alpha 列表（按 batch_no 或全库查，按 |sharpe| 排序）
 
-v80+ 扩展：
+v81+ 扩展：
   3. PnL 同步 + 本地 Self/PPA Corr 计算（参考 ProdMemo 移植）
 
 复用原则：Storage / BatchScheduler / _normalize_settings / expression_key 全部直接
@@ -19,7 +19,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 # 让 web server 既能从项目根（python wq_web/server.py）也能从 -m（python -m wq_web.server）跑
 if __package__ in (None, ""):
@@ -38,7 +38,7 @@ from wq_engine.storage.database import Storage, expression_key  # noqa: E402
 # ---------------- 应用初始化 ----------------
 
 WEB_DIR = Path(__file__).resolve().parent
-app = FastAPI(title="千寻 web v80.2")
+app = FastAPI(title="千寻 web v81")
 app.mount("/static", StaticFiles(directory=WEB_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=str(WEB_DIR / "templates"))
 
@@ -186,6 +186,7 @@ class ProgressBus:
             snap = []
             for b in batches:
                 bid = b["batch_no"]
+                tid = st.find_resumable_task_run.__self__ if False else None  # 占位
                 # 找 task_run：直接按 batch_no 查
                 snap.append({
                     "batch_no": bid,
@@ -217,7 +218,7 @@ async def index(request: Request) -> HTMLResponse:
         "index.html",
         context={
             "db_path": db_path,
-            "version": "v80.2 web",
+            "version": "v81 web alpha",
         },
     )
 
@@ -231,6 +232,7 @@ async def list_batches(limit: int = 50) -> dict:
     rows = st.list_ai_batches(limit=limit)
     # 补 task_run 进度（ai_batches 不存 success/failed）
     for r in rows:
+        tr = st.find_resumable_task_run.__self__ if False else None
         # 直接按 batch_no 找对应 task_run（最近一条）
         try:
             with st._lock:
@@ -343,7 +345,7 @@ async def create_batch(req: Request) -> dict:
         dataset_id=str(settings.get("dataset_id", "")),
         region=str(settings["region"]),
         expression_count=len(todo),
-        note=f"web v80.2 提交（跳过 {skipped}）",
+        note=f"web v81 提交（跳过 {skipped}）",
     )
 
     # 后台跑 BatchScheduler（同步线程），进度通过 bus.push 推到 WebSocket
@@ -503,6 +505,55 @@ async def set_concurrency(req: Request) -> dict:
     return {"ok": True, **out}
 
 
+@app.get("/api/scheduler/state")
+async def get_scheduler_state() -> dict:
+    """实时回测并发状态（web 并发卡实时显示用）。
+
+    在飞数据从数据库取——web 与 MCP 两个进程都写同一份 alpha_machine.db，
+    所以无论批次从哪条通道提交（web 提交面板 / MCP qianxun_submit），
+    在飞批次数、在飞模拟数都准确。
+    （本进程 _live_schedulers 只反映 web 自己提交的批次，MCP 提交的看不到，
+     故不作为主计数来源，仅用于聚合 web 进程的限流倒计时。）
+    """
+    import time as _t
+    st = _storage()
+    # 数据库唯一真相源：跨进程（Storage 的 execute 在内部 _ThreadSafeConn 上，经 st._conn 调用）
+    running_batches = st._conn.execute(
+        "SELECT COUNT(*) FROM task_runs WHERE status = 'running'"
+    ).fetchone()[0]
+    inflight_sims = st._conn.execute(
+        "SELECT COUNT(*) FROM simulations WHERE status IN ('pending','submitted','running')"
+    ).fetchone()[0]
+    # 本进程 web 批次的限流/配额（MCP 进程的限流 web 看不到，仅作补充）
+    rate_limit_reset_at = None
+    sim_quota = None
+    for sch in list(_live_schedulers):
+        rl = getattr(sch, "rate_limit_reset_at", None)
+        if rl and (rate_limit_reset_at is None or rl > rate_limit_reset_at):
+            rate_limit_reset_at = rl
+        qq = getattr(sch, "sim_quota", None)
+        if qq and qq.get("limit", 0) > 0:
+            sim_quota = qq
+    cfg = _get_concurrency()
+    now = _t.time()
+    is_rate_limited = bool(rate_limit_reset_at and rate_limit_reset_at > now)
+    reset_sec = max(0, int(rate_limit_reset_at - now)) if rate_limit_reset_at else 0
+    # 在飞批次：以数据库为准（含 MCP），再与 web 进程内存调度器取大值兜底
+    active = max(running_batches, len(_live_schedulers))
+    return {
+        "ok": True,
+        "running": active > 0,
+        "concurrent": cfg["concurrent"],
+        "sim_slots": cfg["sim_slots"],
+        "active_batches": active,
+        "slots_used": inflight_sims,
+        "slots_free": max(0, cfg["sim_slots"] - inflight_sims),
+        "rate_limited": is_rate_limited,
+        "rate_limit_reset_sec": reset_sec,
+        "sim_quota": sim_quota,
+    }
+
+
 # ---------------- 每日配额接口 ----------------
 
 
@@ -634,6 +685,7 @@ async def compute_corr_one(req: Request) -> dict:
 
     from wq_engine.api.client import APIClient
     from wq_engine.api.local_corr import calculate_correlation
+    from wq_engine.api.config import BrainConfig
 
     st = _storage()
     alpha = st.get_alpha(alpha_id)
@@ -646,15 +698,17 @@ async def compute_corr_one(req: Request) -> dict:
 
     # 从 pnl_json 还原 records + region
     if isinstance(pnl_json, str):
-        pnl_json = json.loads(pnl_json)
+        import json as _json
+        pnl_json = _json.loads(pnl_json)
     records = (pnl_json or {}).get("records") if isinstance(pnl_json, dict) else None
     if not records:
         raise HTTPException(400, f"{alpha_id} 的 PnL 数据为空")
 
     settings_raw = alpha.get("settings")  # alpha 表里有独立的 region 列，没有 settings JSON
     if isinstance(settings_raw, str):
+        import json as _json
         try:
-            settings_raw = json.loads(settings_raw)
+            settings_raw = _json.loads(settings_raw)
         except Exception:
             settings_raw = {}
     settings = settings_raw if isinstance(settings_raw, dict) else {}
@@ -670,11 +724,12 @@ async def compute_corr_one(req: Request) -> dict:
             "SELECT alpha_id, pnl_json FROM alphas WHERE region=? AND pnl_json IS NOT NULL AND alpha_id != ? LIMIT 2000",
             (region, alpha_id),
         ).fetchall()
+    import json as _json
     pool_alphas = []
     for r in rows:
         aid = r["alpha_id"]
         try:
-            data = json.loads(r["pnl_json"]) if isinstance(r["pnl_json"], str) else r["pnl_json"]
+            data = _json.loads(r["pnl_json"]) if isinstance(r["pnl_json"], str) else r["pnl_json"]
             recs = data.get("records") if isinstance(data, dict) else None
             if recs:
                 pnls_by_id[aid] = recs
@@ -723,10 +778,10 @@ async def compute_corr_one(req: Request) -> dict:
             (
                 self_r["min"] if self_r else None,
                 self_r["max"] if self_r else None,
-                json.dumps(self_r["top5"]) if self_r else None,
+                _json.dumps(self_r["top5"]) if self_r else None,
                 ppa_r["min"] if ppa_r else None,
                 ppa_r["max"] if ppa_r else None,
-                json.dumps(ppa_r["top5"]) if ppa_r else None,
+                _json.dumps(ppa_r["top5"]) if ppa_r else None,
                 mc_src[1] if mc_src else None,
                 mc_src[0] if mc_src else None,
                 datetime.now(timezone.utc).isoformat(),
@@ -1049,7 +1104,7 @@ async def stats() -> dict:
 
 @app.websocket("/ws/progress")
 async def ws_progress(ws: WebSocket) -> None:
-    bus.bind_loop(asyncio.get_running_loop())
+    bus.bind_loop(asyncio.get_event_loop())
     await bus.connect(ws)
     try:
         while True:
@@ -1064,10 +1119,8 @@ async def ws_progress(ws: WebSocket) -> None:
 
 
 if __name__ == "__main__":
-    import os
     import uvicorn
 
-    port = int(os.environ.get("QW_PORT", "8090"))
-    print(f"千寻 web v80.2 启动：访问 http://127.0.0.1:{port}")
+    print(f"千寻 web v81 启动：访问 http://127.0.0.1:8090")
     print(f"数据源：{_latest_db()}")
-    uvicorn.run(app, host="127.0.0.1", port=port, log_level="info")
+    uvicorn.run(app, host="127.0.0.1", port=8090, log_level="info")

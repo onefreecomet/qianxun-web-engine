@@ -1,4 +1,4 @@
-/* 千寻 web v80.2 · Command Center */
+/* 千寻 web v81 · Command Center */
 
 :root {
   --bg: #0A0D12;
@@ -190,6 +190,44 @@ main { position: relative; z-index: 1; max-width: 1400px; margin: 0 auto; paddin
 }
 .conc-num:focus { color: var(--accent); }
 .conc-unit { font: 500 14px var(--mono); color: var(--text-dim); }
+
+/* ===== 实时回测状态（在飞批次 / 已用槽 / 限流） ===== */
+.live-row {
+  display: flex; align-items: center; gap: 14px;
+  margin-top: 14px; padding: 12px 14px;
+  background: var(--bg-1); border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.live-stat { display: flex; flex-direction: column; gap: 4px; min-width: 80px; }
+.live-stat-grow { flex: 1; min-width: 0; }
+.live-stat-label { font: 600 12px var(--sans); color: var(--text-dim); letter-spacing: 0.3px; }
+.live-stat-value { font: 700 22px var(--display); color: var(--text); font-variant-numeric: tabular-nums; line-height: 1; }
+.live-stat-unit { font: 500 13px var(--mono); color: var(--text-mute); }
+.slot-bar {
+  height: 8px; margin-top: 8px; border-radius: 5px;
+  background: var(--bg-3); overflow: hidden;
+  border: 1px solid var(--border);
+}
+.slot-bar-fill {
+  height: 100%; width: 0%; border-radius: 5px;
+  background: linear-gradient(90deg, var(--accent), #34d399);
+  transition: width 0.4s var(--ease);
+}
+.rate-chip {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 6px 12px; border-radius: 999px;
+  background: var(--signal-soft); border: 1px solid rgba(34,211,238,0.25);
+  font: 600 13px var(--sans); color: var(--accent); white-space: nowrap;
+}
+.rate-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--accent); box-shadow: 0 0 8px var(--accent);
+  animation: pulse 1.4s infinite;
+}
+.rate-chip.limited {
+  background: var(--neg-soft); border-color: rgba(251,113,133,0.3); color: var(--bad);
+}
+.rate-chip.limited .rate-dot { background: var(--bad); box-shadow: 0 0 8px var(--bad); animation: none; }
 
 /* ===== Sync gauge ===== */
 .sync-flex { display: flex; align-items: center; gap: 20px; }

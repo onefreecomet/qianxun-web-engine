@@ -14,7 +14,7 @@
       <div class="brand-mark">千</div>
       <div class="brand-info">
         <span class="brand-name">qianxun</span>
-        <span class="brand-ver">v80.2 · 指挥中心</span>
+        <span class="brand-ver">v81 · 指挥中心</span>
       </div>
     </div>
     <nav class="anchors">
@@ -116,6 +116,19 @@
               </div>
             </div>
             <p style="font-size:11px;color:var(--text-mute);font-family:var(--mono);margin-top:8px" id="cfgStatus">// 全局生效，下次提交即用</p>
+
+            <!-- 实时回测状态 -->
+            <div class="live-row" id="liveRow">
+              <div class="live-stat">
+                <div class="live-stat-label">在飞批次</div>
+                <div class="live-stat-value"><span id="liveBatches">0</span><span class="live-stat-unit"> / <span id="liveConcurrent">8</span></span></div>
+              </div>
+              <div class="live-stat live-stat-grow">
+                <div class="live-stat-label">已用槽 <span id="liveSlotsUsed">0</span> / <span id="liveSlotsTotal">6</span></div>
+                <div class="slot-bar"><div class="slot-bar-fill" id="liveSlotsBar"></div></div>
+              </div>
+              <div class="rate-chip" id="liveRate"><span class="rate-dot"></span><span id="liveRateText">正常</span></div>
+            </div>
 
             <!-- 提示词库（嵌入并发设置卡内） -->
             <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border)">
