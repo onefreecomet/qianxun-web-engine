@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>千寻 web · 指挥中心</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">千</div>
+      <div class="brand-info">
+        <span class="brand-name">qianxun</span>
+        <span class="brand-ver">v80.2 · 指挥中心</span>
+      </div>
+    </div>
+    <nav class="anchors">
+      <a href="#sec-dashboard">总览 <span class="kbd">1</span></a>
+      <a href="#sec-sync">PnL 同步 <span class="kbd">2</span></a>
+      <a href="#sec-batches">AI 批次 <span class="kbd">3</span></a>
+      <a href="#sec-memo">Alpha 备忘录 <span class="kbd">4</span></a>
+      <a href="#sec-concurrency">设置 <span class="kbd">5</span></a>
+    </nav>
+    <div class="topbar-right">
+      <div class="quota-card" id="quotaBadge" title="每日回测配额（响应头真实值）">
+        <div class="quota-ring">
+          <svg width="20" height="20" viewBox="0 0 20 20">
+            <circle cx="10" cy="10" r="8" fill="none" stroke-width="2" class="quota-ring-bg"/>
+            <circle cx="10" cy="10" r="8" fill="none" stroke-width="2" class="quota-ring-fg" id="quotaRingFg"
+                    stroke-dasharray="50.27" stroke-dashoffset="0" transform="rotate(-90 10 10)"/>
+          </svg>
+        </div>
+        <div>
+          <div class="quota-label">QUOTA</div>
+          <div><span class="quota-value" id="quotaValue">--</span><span class="quota-sub" id="quotaSub">/5000</span></div>
+        </div>
+      </div>
+      <div class="ws"><span class="ws-dot"></span><span id="wsStatus">连接中…</span></div>
+      <span class="ws-indicator" id="wsIndicator">●</span>
+    </div>
+  </header>
+
+  <main>
+    <!-- ============ 总览 ============ -->
+    <section id="sec-dashboard" class="section">
+      <div class="page-head">
+        <div>
+          <h1 class="page-title">千寻 · 总览</h1>
+          <p class="page-sub" id="dbPathLabel">实时同步</p>
+        </div>
+      </div>
+
+      <div class="hero-stats" id="statCards">
+        <div class="h-stat">
+          <div class="h-stat-icon">α</div>
+          <div class="h-stat-label">Alpha 总数</div>
+          <div class="h-stat-value" id="statAlphas">—</div>
+          <div class="h-stat-delta">—</div>
+        </div>
+        <div class="h-stat">
+          <div class="h-stat-icon">⊟</div>
+          <div class="h-stat-label">批次</div>
+          <div class="h-stat-value" id="statBatches">—</div>
+          <div class="h-stat-delta">—</div>
+        </div>
+        <div class="h-stat">
+          <div class="h-stat-icon">⚡</div>
+          <div class="h-stat-label">运行中</div>
+          <div class="h-stat-value" id="statRunning">—</div>
+          <div class="h-stat-delta">—</div>
+        </div>
+        <div class="h-stat">
+          <div class="h-stat-icon">∑</div>
+          <div class="h-stat-label">回测数</div>
+          <div class="h-stat-value" id="statSims">—</div>
+          <div class="h-stat-delta">—</div>
+        </div>
+        <div class="h-stat">
+          <div class="h-stat-icon">✓</div>
+          <div class="h-stat-label">完成回测</div>
+          <div class="h-stat-value" id="statSimsDone">—</div>
+          <div class="h-stat-delta">—</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 并发设置 + PnL 同步（2:1） ============ -->
+    <section id="sec-concurrency" class="section">
+      <div class="g-2-1">
+        <div class="card">
+          <div class="card-head">
+            <div class="card-title"><div class="card-title-icon">⚙</div>并发设置</div>
+            <div class="card-head-right">
+              <span class="live-tag on"><span class="live-dot"></span>已生效</span>
+              <button class="btn btn-primary" id="btnApplyConcurrency">✓ 确认</button>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="conc-grid conc-grid-2">
+              <div class="conc-cell">
+                <div class="conc-label">并发批数</div>
+                <div class="conc-row">
+                  <input class="conc-num" id="cfgConcurrent" type="number" value="8" min="1" max="16">
+                  <span class="conc-unit">批次</span>
+                </div>
+              </div>
+              <div class="conc-cell">
+                <div class="conc-label">并发槽</div>
+                <div class="conc-row">
+                  <input class="conc-num" id="cfgSimSlots" type="number" value="6" min="1" max="10">
+                  <span class="conc-unit">槽位</span>
+                </div>
+              </div>
+            </div>
+            <p style="font-size:11px;color:var(--text-mute);font-family:var(--mono);margin-top:8px" id="cfgStatus">// 全局生效，下次提交即用</p>
+
+            <!-- 提示词库（嵌入并发设置卡内） -->
+            <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border)">
+              <div style="display:flex;align-items:center;margin-bottom:10px">
+                <div class="card-title"><div class="card-title-icon">✎</div>提示词库</div>
+                <div style="margin-left:auto">
+                  <button class="btn btn-primary" id="btnPromptNew">＋ 新建提示词</button>
+                </div>
+              </div>
+              <div id="promptList" class="prompt-list" style="max-height:220px;overflow-y:auto"><div class="muted" style="padding:8px 0">暂无提示词，点右上角新建</div></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <div class="card-title"><div class="card-title-icon">↻</div>PnL 同步</div>
+            <div class="card-head-right">
+              <span class="live-tag" id="syncLiveTag"><span class="live-dot"></span>空闲</span>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="sync-flex">
+              <div class="sync-gauge">
+                <svg width="120" height="120" viewBox="0 0 120 120">
+                  <circle cx="60" cy="60" r="52" fill="none" stroke-width="8" class="gauge-bg"/>
+                  <circle cx="60" cy="60" r="52" fill="none" stroke-width="8" class="gauge-fg"
+                          id="syncGaugeFg"
+                          stroke-dasharray="326.7" stroke-dashoffset="326.7" transform="rotate(-90 60 60)"/>
+                </svg>
+                <div class="gauge-text">
+                  <div style="text-align:center">
+                    <div class="gauge-percent" id="syncPercent">0%</div>
+                    <div class="gauge-sub" id="syncPhaseLabel">就绪</div>
+                  </div>
+                </div>
+              </div>
+              <div class="sync-info">
+                <div class="sync-title" id="syncStatus">未运行</div>
+                <div class="sync-desc" id="syncProgress">等待启动…</div>
+                <div class="sync-grid-3" id="syncResult" style="display:none">
+                  <div><div class="sync-kv">PnL 已同步</div><div class="sync-kv-val" id="syncResultTotal">0</div></div>
+                  <div><div class="sync-kv">Corr 计算</div><div class="sync-kv-val" id="syncResultCorr">0</div></div>
+                  <div><div class="sync-kv">失败</div><div class="sync-kv-val" id="syncResultFail">0</div></div>
+                </div>
+              </div>
+            </div>
+            <div style="margin-top:14px;display:flex;gap:8px">
+              <button class="btn btn-primary" id="btnStartSync">▶ 启动同步</button>
+              <button class="btn" id="btnStopSync">⏹ 停止</button>
+            </div>
+
+            <!-- 手动算 Self/PPA Corr -->
+            <div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--border)">
+              <div class="conc-label" style="margin-bottom:8px">手动算 Self/PPA 相关性</div>
+              <div style="display:flex;gap:8px;align-items:center">
+                <input id="corrAlphaId" placeholder="输入 alpha ID，如 Xg7NRLgm"
+                       style="flex:1;background:var(--bg-2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:6px;font:500 13px var(--mono)">
+                <button class="btn btn-primary" id="btnComputeCorr">⚡ 算 corr</button>
+              </div>
+              <p style="font-size:11px;color:var(--text-mute);font-family:var(--mono);margin-top:6px" id="corrResult">
+                // 需先做 PnL 同步；按 alpha 单点计算，不批量消耗资源
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- PnL 同步锚点（内容在上面） -->
+    <span id="sec-sync"></span>
+
+    <!-- ============ AI 批次 ============ -->
+    <section id="sec-batches" class="section">
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title"><div class="card-title-icon">▶</div>AI 批次</div>
+          <div class="card-head-right">
+            <button class="btn-mini" id="refreshBatches">⟳</button>
+            <button class="btn btn-primary" onclick="document.getElementById('submitPanel').open=true">+ 提交新批次</button>
+          </div>
+        </div>
+        <div class="card-body" style="padding:0">
+          <div class="row">
+            <div class="col col-left">
+              <div class="batch-list" id="batchList">
+                <div class="muted" style="padding:14px">加载中…</div>
+              </div>
+            </div>
+            <div class="col col-right">
+              <div class="col-right-scroll">
+                <h3 id="batchDetailTitle" class="detail-title">
+                  <span class="card-title-icon">⎙</span>批次详情
+                </h3>
+                <div id="batchDetail"><div class="muted">左侧选一个批次</div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <details class="submit-box" id="submitPanel" style="margin-top:16px">
+        <summary>展开 / 折叠提交面板</summary>
+        <p class="muted" style="font-size:13px">粘贴 JSON（格式 <code>{settings, expressions[]}</code>）。并发用「并发设置」的全局值。</p>
+        <textarea id="submitJson" rows="6" placeholder='{"settings":{"region":"USA","decay":4,...},"expressions":[{"expression":"rank(close)","decay":4}]}'></textarea>
+        <div class="form-row">
+          <label>Producer <input id="submitProducer" value="阿法"></label>
+          <label><input id="submitNoBackfill" type="checkbox"> 跳过回填</label>
+        </div>
+        <div class="form-row">
+          <button class="btn btn-primary" id="btnSubmit">提交</button>
+          <span id="submitStatus" class="muted"></span>
+        </div>
+      </details>
+    </section>
+
+    <!-- ============ Alpha 备忘录 ============ -->
+    <section id="sec-memo" class="section">
+      <div class="page-head">
+        <div>
+          <h1 class="page-title">Alpha 备忘录</h1>
+          <p class="page-sub">跟踪候选 alpha：基本指标 · 金字塔主题 · 提交状态 · 手写备注</p>
+        </div>
+      </div>
+
+      <!-- 添加 + 提交 + 同步 工具条 -->
+      <div class="card" style="margin-bottom:16px">
+        <div class="card-body" style="padding:14px 18px">
+          <div style="display:flex;gap:20px;flex-wrap:wrap">
+            <div style="flex:1;min-width:280px">
+              <div class="conc-label" style="margin-bottom:6px">添加到备忘录</div>
+              <div style="display:flex;gap:8px">
+                <input id="memoAddId" placeholder="输入 alpha ID，如 Xg7NRLgm"
+                       style="flex:1;background:var(--bg-2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:6px;font:500 13px var(--mono)">
+                <button class="btn btn-primary" id="btnMemoAdd">＋ 添加</button>
+              </div>
+            </div>
+            <div style="flex:1;min-width:280px">
+              <div class="conc-label" style="margin-bottom:6px">直接提交（真实操作）</div>
+              <div style="display:flex;gap:8px">
+                <input id="memoSubmitId" placeholder="输入要提交的 alpha ID"
+                       style="flex:1;background:var(--bg-2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:6px;font:500 13px var(--mono)">
+                <button class="btn" id="btnMemoSubmit" style="border-color:var(--warn);color:var(--warn)">⇪ 提交</button>
+              </div>
+            </div>
+            <div style="display:flex;align-items:flex-end">
+              <button class="btn" id="btnMemoSync">⟳ 同步状态</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 按 region 分组的列表 -->
+      <div id="memoGroups"><div class="muted" style="padding:14px">暂无备忘录，先添加一个 alpha</div></div>
+    </section>
+  </main>
+
+  <!-- 提示词编辑弹窗 -->
+  <div id="promptModal" class="modal-overlay" style="display:none">
+    <div class="modal">
+      <div class="modal-head">
+        <span style="font:600 15px var(--sans)">编辑提示词</span>
+        <button class="btn-mini" id="btnPromptModalClose">✕</button>
+      </div>
+      <div class="modal-body">
+        <label style="display:block;margin-bottom:6px">名字</label>
+        <input id="promptModalName" placeholder="提示词名字，如：研究纠错模板"
+               style="width:100%;margin-bottom:12px">
+        <label style="display:block;margin-bottom:6px">内容</label>
+        <textarea id="promptModalContent" rows="10" placeholder="提示词内容…"
+                  style="width:100%;resize:vertical;min-height:180px"></textarea>
+      </div>
+      <div class="modal-foot">
+        <button class="btn" id="btnPromptDelete" style="border-color:var(--bad);color:var(--bad)">删除</button>
+        <span style="flex:1"></span>
+        <button class="btn" id="btnPromptModalCancel">取消</button>
+        <button class="btn btn-primary" id="btnPromptSave">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

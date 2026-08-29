@@ -1,0 +1,21 @@
+# 千寻 web 引擎依赖（Python 3.10+）
+# 安装：pip install -r requirements.txt
+
+# ---- Web 服务 ----
+fastapi>=0.110
+uvicorn[standard]>=0.29
+jinja2>=3.1
+websockets>=12
+
+# ---- BRAIN API 客户端 ----
+httpx>=0.27
+loguru>=0.7
+
+# ---- MCP（Agent 对接）----
+mcp>=1.2
+
+# ---- 凭据回退（系统 keyring）----
+keyring>=24
+
+# ---- 可选：原生桌面窗口模式（run_native.py 用，不装则只用浏览器）----
+# pywebview>=5.0
