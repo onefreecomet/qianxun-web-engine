@@ -20,10 +20,9 @@ import argparse
 import json
 import os
 import re
-import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 # 让脚本既能 python -m wq_engine.mcp_server 也能 python wq_engine/mcp_server.py 跑
