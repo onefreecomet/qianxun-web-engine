@@ -1,27 +1,32 @@
 /* 千寻 web v80.2 · Command Center */
 
 :root {
-  --bg: #08090d;
-  --bg-1: #0d1017;
-  --bg-2: #131822;
-  --bg-3: #1a2030;
-  --border: #1f2638;
+  --bg: #0A0D12;
+  --bg-1: #0E1219;
+  --bg-2: #12161E;
+  --bg-3: #171C26;
+  --border: #232B36;
   --border-2: #2a3349;
-  --text: #e2e8f0;
-  --text-dim: #94a3b8;
-  --text-mute: #475569;
-  --accent: #38bdf8;
-  --accent-2: #a78bfa;
+  --text: #C2CBD8;
+  --text-dim: #7E8A9C;
+  --text-mute: #4D5765;
+  --accent: #22D3EE;
+  --accent-2: #F5B544;
   --accent-3: #34d399;
-  --warn: #fbbf24;
-  --bad: #f43f5e;
-  --good: #34d399;
-  --up: #38bdf8;
-  --down: #f43f5e;
-  --grid: rgba(56,189,248,0.04);
+  --warn: #F5B544;
+  --bad: #FB7185;
+  --good: #4ADE80;
+  --up: #22D3EE;
+  --down: #FB7185;
+  --grid: rgba(34,211,238,0.04);
+  --signal-soft: rgba(34,211,238,0.10);
+  --signal-2-soft: rgba(245,181,68,0.10);
+  --pos-soft: rgba(74,222,128,0.12);
+  --neg-soft: rgba(251,113,133,0.12);
   --display: "Space Grotesk", -apple-system, "PingFang SC", sans-serif;
-  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
-  --sans: "Inter", -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --sans: "IBM Plex Sans", -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  --ease: cubic-bezier(.2,.7,.3,1);
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -34,9 +39,10 @@ html, body {
 body::before {
   content: ''; position: fixed; inset: 0; pointer-events: none; z-index: 0;
   background-image:
-    linear-gradient(var(--grid) 1px, transparent 1px),
-    linear-gradient(90deg, var(--grid) 1px, transparent 1px);
-  background-size: 32px 32px;
+    radial-gradient(1100px 520px at 85% -8%, rgba(34,211,238,0.06), transparent 60%),
+    radial-gradient(900px 480px at 0% 0%, rgba(245,181,68,0.05), transparent 55%),
+    radial-gradient(rgba(255,255,255,0.022) 1px, transparent 1px);
+  background-size: auto, auto, 22px 22px;
 }
 
 /* ===== Topbar ===== */
@@ -327,6 +333,9 @@ code { background: rgba(56,189,248,0.1); color: var(--accent); padding: 1px 6px;
   .anchors a { padding: 0 10px; font-size: 13px; }
   .topbar-right .quota-card { display: none; }
 }
+@media (max-width: 600px) {
+  .prompt-list { grid-template-columns: 1fr; }
+}
 /* ===== Modal ===== */
 .modal-overlay {
   position: fixed; inset: 0; background: rgba(0,0,0,0.6);
@@ -358,17 +367,26 @@ code { background: rgba(56,189,248,0.1); color: var(--accent); padding: 1px 6px;
 }
 
 /* ===== Prompt list ===== */
-.prompt-list { display: flex; flex-direction: column; gap: 8px; }
+.prompt-list { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+.prompt-list .muted { grid-column: 1 / -1; }
 .prompt-item {
-  display: flex; align-items: center; gap: 12px;
+  display: flex; align-items: center; gap: 10px;
   background: var(--bg-2); border: 1px solid var(--border);
-  padding: 10px 14px; border-radius: 8px; cursor: pointer;
-  transition: all 0.12s;
+  padding: 9px 12px; border-radius: 8px; cursor: pointer;
+  transition: all 0.15s; min-width: 0;
 }
-.prompt-item:hover { border-color: var(--accent); }
-.prompt-name { font: 600 13px var(--sans); color: var(--text); }
+.prompt-item:hover {
+  border-color: var(--accent);
+  background: rgba(56,189,248,0.06);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(0,0,0,0.3);
+}
+.prompt-name {
+  font: 600 13px var(--sans); color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-shrink: 0; max-width: 45%;
+}
 .prompt-preview {
-  flex: 1; font: 400 12px var(--mono); color: var(--text-mute);
+  flex: 1; min-width: 0; font: 400 12px var(--mono); color: var(--text-mute);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
@@ -414,3 +432,65 @@ code { background: rgba(56,189,248,0.1); color: var(--accent); padding: 1px 6px;
   cursor: pointer;
 }
 .theme-sel:focus { border-color: var(--accent); }
+
+/* ===== v4.2 改版质感（墨色 + 信号） ===== */
+.ico { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+::selection { background: rgba(34,211,238,0.25); color: var(--text); }
+
+/* 品牌标：纯信号青渐变 */
+.brand-mark { background: linear-gradient(145deg, var(--accent), #7ad9ec); box-shadow: 0 0 0 1px rgba(34,211,238,0.4), 0 6px 16px rgba(34,211,238,0.18); }
+
+/* 标题信号标记条 */
+.page-title { position: relative; padding-left: 14px; font-size: 24px; }
+.page-title::before { content: ''; position: absolute; left: 0; top: 5px; bottom: 5px; width: 3px; border-radius: 3px; background: linear-gradient(var(--accent), rgba(34,211,238,0.2)); }
+
+/* 卡片顶部信号高光线 */
+.card::before { content: ''; position: absolute; top: 0; left: 20px; right: 20px; height: 2px; background: linear-gradient(90deg, transparent, rgba(34,211,238,0.55), transparent); opacity: 0; transition: .25s var(--ease); z-index: 2; }
+.card:hover::before { opacity: 1; }
+
+/* 卡片标题图标：信号青柔光 */
+.card-title-icon { background: var(--signal-soft); border: 1px solid rgba(34,211,238,0.22); color: var(--accent); }
+
+/* 总览卡图标圆 + 悬浮信号条 + 上浮 */
+.h-stat { transition: transform .2s var(--ease), border-color .2s var(--ease), box-shadow .2s var(--ease); }
+.h-stat::after { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--accent); opacity: 0; transition: .2s var(--ease); }
+.h-stat:hover { transform: translateY(-2px); border-color: rgba(34,211,238,0.4); box-shadow: 0 10px 24px rgba(0,0,0,0.4); }
+.h-stat:hover::after { opacity: .9; }
+.h-stat-icon { box-shadow: inset 0 0 0 1px rgba(34,211,238,0.18), 0 0 14px rgba(34,211,238,0.12); }
+
+/* 指标 delta 药丸 */
+.h-stat-delta { display: inline-flex; align-items: center; gap: 5px; width: fit-content; font: 500 11px var(--mono); padding: 2px 9px; border-radius: 20px; margin-top: 6px; }
+.h-stat-delta.up { color: var(--good); background: var(--pos-soft); }
+.h-stat-delta.down { color: var(--bad); background: var(--neg-soft); }
+
+/* 实时标签药丸 */
+.live-tag { border: 1px solid var(--border); border-radius: 20px; padding: 4px 9px; text-transform: none; letter-spacing: 0; }
+.live-tag.on { color: var(--good); background: var(--pos-soft); border-color: rgba(74,222,128,0.35); box-shadow: 0 0 12px rgba(74,222,128,0.18); }
+
+/* 配额环 / 仪表辉光 */
+.quota-ring-fg { filter: drop-shadow(0 0 5px rgba(34,211,238,0.55)); }
+.gauge-fg { stroke: var(--warn); filter: drop-shadow(0 0 6px rgba(245,181,68,0.5)); }
+
+/* 提示词 / 批次项左侧信号条 */
+.prompt-item { border-left: 2px solid transparent; }
+.prompt-item:hover { border-left-color: var(--accent); }
+.batch-item { border-left: 2px solid transparent; }
+.batch-item:hover, .batch-item.selected { border-left-color: var(--accent); }
+
+/* 弹窗顶部高光 */
+.modal { position: relative; }
+.modal::before { content: ''; position: absolute; top: 0; left: 20px; right: 20px; height: 2px; background: linear-gradient(90deg, transparent, rgba(34,211,238,0.5), transparent); border-radius: 2px; }
+
+/* 入场动画 */
+@keyframes riseIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+.section { animation: riseIn .55s var(--ease) backwards; }
+.card { animation: riseIn .55s var(--ease) backwards; }
+.hero-stats .h-stat:nth-child(1) { animation: riseIn .5s var(--ease) .03s backwards; }
+.hero-stats .h-stat:nth-child(2) { animation: riseIn .5s var(--ease) .08s backwards; }
+.hero-stats .h-stat:nth-child(3) { animation: riseIn .5s var(--ease) .13s backwards; }
+.hero-stats .h-stat:nth-child(4) { animation: riseIn .5s var(--ease) .18s backwards; }
+.hero-stats .h-stat:nth-child(5) { animation: riseIn .5s var(--ease) .23s backwards; }
+
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } * { animation: none !important; transition: none !important; } }

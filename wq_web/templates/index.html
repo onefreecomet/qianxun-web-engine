@@ -5,7 +5,7 @@
   <title>千寻 web · 指挥中心</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -39,7 +39,7 @@
         </div>
       </div>
       <div class="ws"><span class="ws-dot"></span><span id="wsStatus">连接中…</span></div>
-      <span class="ws-indicator" id="wsIndicator">●</span>
+      <span class="ws-indicator" id="wsIndicator"><svg viewBox="0 0 16 16" style="width:10px;height:10px;fill:currentColor;stroke:none"><circle cx="8" cy="8" r="4"/></svg></span>
     </div>
   </header>
 
@@ -55,31 +55,31 @@
 
       <div class="hero-stats" id="statCards">
         <div class="h-stat">
-          <div class="h-stat-icon">α</div>
+          <div class="h-stat-icon"><svg class="ico" viewBox="0 0 16 16"><path d="M2 8h3l2-5 2 10 2-5h3"/></svg></div>
           <div class="h-stat-label">Alpha 总数</div>
           <div class="h-stat-value" id="statAlphas">—</div>
           <div class="h-stat-delta">—</div>
         </div>
         <div class="h-stat">
-          <div class="h-stat-icon">⊟</div>
+          <div class="h-stat-icon"><svg class="ico" viewBox="0 0 16 16"><path d="M8 2 14 5 8 8 2 5Z"/><path d="M2 9l6 3 6-3"/></svg></div>
           <div class="h-stat-label">批次</div>
           <div class="h-stat-value" id="statBatches">—</div>
           <div class="h-stat-delta">—</div>
         </div>
         <div class="h-stat">
-          <div class="h-stat-icon">⚡</div>
+          <div class="h-stat-icon"><svg class="ico" viewBox="0 0 16 16"><path d="M9 2 4 9h4l-1 5 6-8H9Z"/></svg></div>
           <div class="h-stat-label">运行中</div>
           <div class="h-stat-value" id="statRunning">—</div>
           <div class="h-stat-delta">—</div>
         </div>
         <div class="h-stat">
-          <div class="h-stat-icon">∑</div>
+          <div class="h-stat-icon"><svg class="ico" viewBox="0 0 16 16"><path d="M3 13v-5M8 13V4M13 13v-8"/></svg></div>
           <div class="h-stat-label">回测数</div>
           <div class="h-stat-value" id="statSims">—</div>
           <div class="h-stat-delta">—</div>
         </div>
         <div class="h-stat">
-          <div class="h-stat-icon">✓</div>
+          <div class="h-stat-icon"><svg class="ico" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M5.5 8l2 2 3.5-4.5"/></svg></div>
           <div class="h-stat-label">完成回测</div>
           <div class="h-stat-value" id="statSimsDone">—</div>
           <div class="h-stat-delta">—</div>
@@ -92,10 +92,10 @@
       <div class="g-2-1">
         <div class="card">
           <div class="card-head">
-            <div class="card-title"><div class="card-title-icon">⚙</div>并发设置</div>
+            <div class="card-title"><div class="card-title-icon"><svg class="ico" viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.3"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.6 3.6l1.4 1.4M11 11l1.4 1.4M12.4 3.6 11 5M5 11l-1.4 1.4"/></svg></div>并发设置</div>
             <div class="card-head-right">
               <span class="live-tag on"><span class="live-dot"></span>已生效</span>
-              <button class="btn btn-primary" id="btnApplyConcurrency">✓ 确认</button>
+              <button class="btn btn-primary" id="btnApplyConcurrency"><svg class="ico" viewBox="0 0 16 16"><path d="M3 8.5 6.5 12 13 4.5"/></svg>确认</button>
             </div>
           </div>
           <div class="card-body">
@@ -120,9 +120,9 @@
             <!-- 提示词库（嵌入并发设置卡内） -->
             <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border)">
               <div style="display:flex;align-items:center;margin-bottom:10px">
-                <div class="card-title"><div class="card-title-icon">✎</div>提示词库</div>
+                <div class="card-title"><div class="card-title-icon"><svg class="ico" viewBox="0 0 16 16"><path d="M11 3 13 5 6 12 3 13 4 10Z"/><path d="M9 5 11 7"/></svg></div>提示词库</div>
                 <div style="margin-left:auto">
-                  <button class="btn btn-primary" id="btnPromptNew">＋ 新建提示词</button>
+                  <button class="btn btn-primary" id="btnPromptNew"><svg class="ico" viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"/></svg>新建提示词</button>
                 </div>
               </div>
               <div id="promptList" class="prompt-list" style="max-height:220px;overflow-y:auto"><div class="muted" style="padding:8px 0">暂无提示词，点右上角新建</div></div>
@@ -132,7 +132,7 @@
 
         <div class="card">
           <div class="card-head">
-            <div class="card-title"><div class="card-title-icon">↻</div>PnL 同步</div>
+            <div class="card-title"><div class="card-title-icon"><svg class="ico" viewBox="0 0 16 16"><path d="M4 4a5 5 0 0 1 9 3"/><path d="M13 3v4h-4"/><path d="M12 12a5 5 0 0 1-9-3"/><path d="M3 13v-4h4"/></svg></div>PnL 同步</div>
             <div class="card-head-right">
               <span class="live-tag" id="syncLiveTag"><span class="live-dot"></span>空闲</span>
             </div>
@@ -164,8 +164,8 @@
               </div>
             </div>
             <div style="margin-top:14px;display:flex;gap:8px">
-              <button class="btn btn-primary" id="btnStartSync">▶ 启动同步</button>
-              <button class="btn" id="btnStopSync">⏹ 停止</button>
+              <button class="btn btn-primary" id="btnStartSync"><svg class="ico" viewBox="0 0 16 16"><path d="M5 3 12 8 5 13Z"/></svg>启动同步</button>
+              <button class="btn" id="btnStopSync"><svg class="ico" viewBox="0 0 16 16"><rect x="4" y="4" width="8" height="8" rx="1.5"/></svg>停止</button>
             </div>
 
             <!-- 手动算 Self/PPA Corr -->
@@ -174,7 +174,7 @@
               <div style="display:flex;gap:8px;align-items:center">
                 <input id="corrAlphaId" placeholder="输入 alpha ID，如 Xg7NRLgm"
                        style="flex:1;background:var(--bg-2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:6px;font:500 13px var(--mono)">
-                <button class="btn btn-primary" id="btnComputeCorr">⚡ 算 corr</button>
+                <button class="btn btn-primary" id="btnComputeCorr"><svg class="ico" viewBox="0 0 16 16"><path d="M9 2 4 9h4l-1 5 6-8H9Z"/></svg>算 corr</button>
               </div>
               <p style="font-size:11px;color:var(--text-mute);font-family:var(--mono);margin-top:6px" id="corrResult">
                 // 需先做 PnL 同步；按 alpha 单点计算，不批量消耗资源
@@ -192,10 +192,10 @@
     <section id="sec-batches" class="section">
       <div class="card">
         <div class="card-head">
-          <div class="card-title"><div class="card-title-icon">▶</div>AI 批次</div>
+          <div class="card-title"><div class="card-title-icon"><svg class="ico" viewBox="0 0 16 16"><path d="M5 3 12 8 5 13Z"/></svg></div>AI 批次</div>
           <div class="card-head-right">
-            <button class="btn-mini" id="refreshBatches">⟳</button>
-            <button class="btn btn-primary" onclick="document.getElementById('submitPanel').open=true">+ 提交新批次</button>
+            <button class="btn-mini" id="refreshBatches"><svg class="ico" viewBox="0 0 16 16"><path d="M4 4a5 5 0 0 1 9 3"/><path d="M13 3v4h-4"/><path d="M12 12a5 5 0 0 1-9-3"/><path d="M3 13v-4h4"/></svg></button>
+            <button class="btn btn-primary" onclick="document.getElementById('submitPanel').open=true"><svg class="ico" viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"/></svg>提交新批次</button>
           </div>
         </div>
         <div class="card-body" style="padding:0">
@@ -208,7 +208,7 @@
             <div class="col col-right">
               <div class="col-right-scroll">
                 <h3 id="batchDetailTitle" class="detail-title">
-                  <span class="card-title-icon">⎙</span>批次详情
+                  <span class="card-title-icon"><svg class="ico" viewBox="0 0 16 16"><path d="M5 2h6l3 3v9H5Z"/><path d="M10.5 2v3H13"/></svg></span>批次详情
                 </h3>
                 <div id="batchDetail"><div class="muted">左侧选一个批次</div></div>
               </div>
@@ -250,7 +250,7 @@
               <div style="display:flex;gap:8px">
                 <input id="memoAddId" placeholder="输入 alpha ID，如 Xg7NRLgm"
                        style="flex:1;background:var(--bg-2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:6px;font:500 13px var(--mono)">
-                <button class="btn btn-primary" id="btnMemoAdd">＋ 添加</button>
+                <button class="btn btn-primary" id="btnMemoAdd"><svg class="ico" viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"/></svg>添加</button>
               </div>
             </div>
             <div style="flex:1;min-width:280px">
@@ -258,11 +258,11 @@
               <div style="display:flex;gap:8px">
                 <input id="memoSubmitId" placeholder="输入要提交的 alpha ID"
                        style="flex:1;background:var(--bg-2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:6px;font:500 13px var(--mono)">
-                <button class="btn" id="btnMemoSubmit" style="border-color:var(--warn);color:var(--warn)">⇪ 提交</button>
+                <button class="btn" id="btnMemoSubmit" style="border-color:var(--warn);color:var(--warn)"><svg class="ico" viewBox="0 0 16 16"><path d="M8 11V4M5 7l3-3 3 3M3 13h10"/></svg>提交</button>
               </div>
             </div>
             <div style="display:flex;align-items:flex-end">
-              <button class="btn" id="btnMemoSync">⟳ 同步状态</button>
+              <button class="btn" id="btnMemoSync"><svg class="ico" viewBox="0 0 16 16"><path d="M4 4a5 5 0 0 1 9 3"/><path d="M13 3v4h-4"/><path d="M12 12a5 5 0 0 1-9-3"/><path d="M3 13v-4h4"/></svg>同步状态</button>
             </div>
           </div>
         </div>
@@ -278,7 +278,7 @@
     <div class="modal">
       <div class="modal-head">
         <span style="font:600 15px var(--sans)">编辑提示词</span>
-        <button class="btn-mini" id="btnPromptModalClose">✕</button>
+        <button class="btn-mini" id="btnPromptModalClose"><svg class="ico" viewBox="0 0 16 16"><path d="M4 4 12 12M12 4 4 12"/></svg></button>
       </div>
       <div class="modal-body">
         <label style="display:block;margin-bottom:6px">名字</label>
