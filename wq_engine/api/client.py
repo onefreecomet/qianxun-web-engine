@@ -599,6 +599,57 @@ class APIClient:
             page += 1
         return all_results
 
+    def list_scope_alphas(
+        self,
+        region: str,
+        delay: int,
+        *,
+        max_scan: int = 1000,
+        page_size: int = 100,
+        hidden: bool | None = False,
+    ) -> list[dict]:
+        """拉取指定 region/delay 下已提交 alpha 列表（Osmosis 用）。
+
+        端点：
+          GET /users/self/alphas?limit=100&offset=N&order=-dateSubmitted
+              &settings.region=USA&settings.delay=1&hidden=false
+              &status%21=UNSUBMITTED%1FIS_FAIL
+
+        返回的每条含 settings/self_corr/prod_corr 等。
+        """
+        all_results: list[dict] = []
+        seen: set[str] = set()
+        offset = 0
+        limit = page_size
+        target_region = str(region).strip().upper()
+        target_delay = int(str(delay).strip())
+
+        while offset < max_scan:
+            hidden_part = f"&hidden={'true' if hidden else 'false'}" if hidden is not None else ""
+            url = (
+                f"/users/self/alphas?limit={limit}&offset={offset}"
+                f"&order=-dateSubmitted&settings.region={target_region}"
+                f"&settings.delay={target_delay}{hidden_part}"
+                f"&status%21=UNSUBMITTED%1FIS_FAIL"
+            )
+            resp = self._request_with_retry("GET", url, op_name=f"list_scope_alphas[{offset}]")
+            data = resp.json()
+            results = data.get("results", [])
+            if not results:
+                break
+            for a in results:
+                aid = a.get("id")
+                if not aid or aid in seen:
+                    continue
+                seen.add(aid)
+                all_results.append(a)
+            if len(results) < limit:
+                break
+            offset += len(results)
+            if offset >= max_scan:
+                break
+        return all_results
+
     def get_alpha_details(self, alpha_id: str) -> dict:
         """单 alpha 详情。"""
         resp = self._request_with_retry(

@@ -31,6 +31,7 @@ from fastapi.staticfiles import StaticFiles  # noqa: E402
 from fastapi.templating import Jinja2Templates  # noqa: E402
 
 from wq_engine.mcp_server import _client, _latest_db, _normalize_settings  # noqa: E402
+from wq_engine.osmosis import OsmosisConfig, build_allocation_plan  # noqa: E402
 from wq_engine.scheduler.runner import BatchScheduler  # noqa: E402
 from wq_engine.storage.database import Storage, expression_key  # noqa: E402
 
@@ -738,6 +739,193 @@ async def pnl_sync_status() -> dict:
 @app.post("/api/sync/pnl/stop")
 async def pnl_sync_stop() -> dict:
     return pnl_sync_state.stop()
+
+
+# ---------------- Osmosis 分配器 ----------------
+
+OSMOSIS_RULES = {
+    "title": "Osmosis 是什么",
+    "summary": "Osmosis = 你自己精选的 Alpha 投资组合。在 [Region × Delay] 赛道里给已提交的 alpha 打信心分，平台用这套组合的模拟 PnL 给你排名，排名换成 1~2 倍的每日基础薪酬乘数。",
+    "rules": [
+        {"title": "至少 3 个赛道", "content": "至少在不同的 3 个 Region × Delay（如 USA×D1）里完成配置。"},
+        {"title": "每赛道 ≥10 个 alpha", "content": "每个赛道内至少挑 10 个已提交 alpha，新旧不限，普通 / Atom / Power Pool 都可以。"},
+        {"title": "每赛道恰好 100,000 分", "content": "每个 Region 的分配总分上限为 10 万分，且必须精准等于 100,000，多一分少一分都不算达标。"},
+        {"title": "每周日 23:59 EST 锁定", "content": "截点前可无限次修改；截点后方案被锁定，用于之后一周的每日计算。"},
+        {"title": "7 天等待期", "content": "本周日锁定的方案不是下周一生效，而是下下周一才生效（官方示例：2/8 锁定 → 2/16~2/22 使用）。"},
+    ],
+    "impact": [
+        {"title": "Daily Osmosis Rank", "content": "按各赛道 PnL 表现在全平台排名，换算成 1~2 之间的乘数，直接乘在每日基础薪酬上。"},
+        {"title": "Combined Osmosis Performance", "content": "季度末看各周累积复合夏普，是 Genius 季度奖金评定维度之一（与单独 alpha 表现、Selected Alphas 等取最高值）。"},
+        {"title": "实盘加速", "content": "被分配 Osmosis 的 alpha 更有机会提前进入实盘拿到 weight，从而有机会获得更高季度奖金。"},
+    ],
+    "timeline": [
+        {"day": "周日 23:59 EST", "event": "方案锁定，进入 7 天等待期。"},
+        {"day": "+7 天（周一）", "event": "方案生效，系统把它映射到「2 年前的样本外数据」上跑模拟。"},
+        {"day": "平行世界周三", "event": "把你的方案当作当天做出的投资决策（Post）。"},
+        {"day": "平行世界周四", "event": "按决策执行交易（T+2 结算周期）。"},
+        {"day": "平行世界周五", "event": "收盘结算，生成这周唯一的单日 PnL。"},
+        {"day": "现实周一/二/三", "event": "当周新 PnL 还没结算出来，展示的是 2 年前上周五的结算结果 → 数字三天纹丝不动。"},
+        {"day": "现实周四", "event": "2 年前当周结算完成，Rank 才真正跳动。"},
+    ],
+    "golden_rule": "所以不要被「周一到周三不动、周四突然跳」吓到乱改方案——那三天本质是同一个样本点。真正该追的是 Combined Osmosis Performance（稳定的日度正收益）。官方黄金法则：Aim for steady positive returns with reasonable risk.",
+}
+
+
+def _patch_alpha_points(alpha_id: str, points: int | None) -> dict:
+    client = _client()
+    payload = {"osmosisPoints": None if points is None else int(points)}
+    resp = client._request_with_retry(
+        "PATCH",
+        f"/alphas/{alpha_id}",
+        json=payload,
+        op_name=f"patch_osmosis_points[{alpha_id}]",
+    )
+    data = resp.json() if resp.text else {}
+    return {
+        "alpha_id": alpha_id,
+        "points": points,
+        "confirmed": data.get("osmosisPoints") if isinstance(data, dict) else None,
+    }
+
+
+def _clear_existing_points(region: str, delay: int, max_scan: int = 1000) -> dict:
+    client = _client()
+    records = client.list_scope_alphas(region, delay, max_scan=max_scan)
+    scored = [a for a in records if float(a.get("osmosisPoints") or 0) > 0]
+    if not scored:
+        return {"cleared": 0, "failed": 0, "details": []}
+
+    ok = 0
+    failed = 0
+    details = []
+    for a in scored:
+        alpha_id = str(a.get("id"))
+        try:
+            _patch_alpha_points(alpha_id, None)
+            ok += 1
+            details.append({"alpha_id": alpha_id, "ok": True})
+        except Exception as e:
+            failed += 1
+            details.append({"alpha_id": alpha_id, "ok": False, "error": str(e)[:200]})
+
+    return {"cleared": ok, "failed": failed, "details": details}
+
+
+@app.get("/api/osmosis/config")
+async def osmosis_config() -> dict:
+    return {
+        "ok": True,
+        "default_region": "USA",
+        "default_delay": 1,
+        "total_points": 100_000,
+        "min_alpha_count": 10,
+        "max_alpha_count": 25,
+    }
+
+
+@app.get("/api/osmosis/rules")
+async def osmosis_rules() -> dict:
+    return {"ok": True, "rules": OSMOSIS_RULES}
+
+
+@app.post("/api/osmosis/preview")
+async def osmosis_preview(req: Request) -> dict:
+    """预览 Osmosis 分配方案（不写平台）。"""
+    body = {}
+    try:
+        body = await req.json()
+    except Exception:
+        pass
+    region = str(body.get("region", "USA")).strip().upper()
+    delay = int(body.get("delay", 1))
+
+    try:
+        client = _client()
+    except Exception as e:
+        return {"ok": False, "error": f"BRAIN 客户端初始化失败：{e}"}
+
+    try:
+        config = OsmosisConfig(region=region, delay=delay)
+        return build_allocation_plan(client, region, delay, config=config)
+    except Exception as e:
+        logger.exception("Osmosis preview failed")
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/osmosis/allocate")
+async def osmosis_allocate(req: Request) -> dict:
+    """实际把 Osmosis 分配方案写入平台（危险，需 confirm=true）。"""
+    body = {}
+    try:
+        body = await req.json()
+    except Exception:
+        pass
+    region = str(body.get("region", "USA")).strip().upper()
+    delay = int(body.get("delay", 1))
+    confirm = bool(body.get("confirm", False))
+
+    if not confirm:
+        return {
+            "ok": False,
+            "error": "allocate 必须传 confirm=true 才会写入平台。请先用 preview 确认方案。",
+        }
+
+    try:
+        client = _client()
+    except Exception as e:
+        return {"ok": False, "error": f"BRAIN 客户端初始化失败：{e}"}
+
+    try:
+        config = OsmosisConfig(region=region, delay=delay)
+        plan = build_allocation_plan(client, region, delay, config=config)
+        if not plan.get("ok"):
+            return plan
+
+        selected = plan.get("selected", [])
+        if not selected:
+            return {"ok": False, "error": "没有选中任何 alpha，无法写入"}
+
+        clear_result = _clear_existing_points(region, delay, max_scan=config.max_alpha_scan)
+
+        ok = 0
+        failed = 0
+        writes = []
+        for row in selected:
+            alpha_id = row.get("alpha_id")
+            points = row.get("osmosis_new")
+            if not alpha_id or points is None:
+                continue
+            try:
+                res = _patch_alpha_points(alpha_id, points)
+                ok += 1
+                writes.append({
+                    "alpha_id": alpha_id,
+                    "points": points,
+                    "ok": True,
+                    "confirmed": res.get("confirmed"),
+                })
+            except Exception as e:
+                failed += 1
+                writes.append({
+                    "alpha_id": alpha_id,
+                    "points": points,
+                    "ok": False,
+                    "error": str(e)[:200],
+                })
+
+        return {
+            "ok": True,
+            "scope": plan.get("scope"),
+            "total_points": plan.get("total_points"),
+            "selected_count": len(selected),
+            "cleared": clear_result,
+            "written": ok,
+            "failed": failed,
+            "writes": writes,
+        }
+    except Exception as e:
+        logger.exception("Osmosis allocate failed")
+        return {"ok": False, "error": str(e)}
 
 
 # ---------------- 手动算 corr（单 alpha，按需触发，节省资源） ----------------

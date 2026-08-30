@@ -23,6 +23,7 @@
       <a href="#sec-batches">AI 批次 <span class="kbd">3</span></a>
       <a href="#sec-memo">Alpha 备忘录 <span class="kbd">4</span></a>
       <a href="#sec-concurrency">设置 <span class="kbd">5</span></a>
+      <a href="#sec-osmosis">Osmosis 分配器 <span class="kbd">6</span></a>
     </nav>
     <div class="topbar-right">
       <div class="quota-card" id="quotaBadge" title="每日回测配额（响应头真实值）">
@@ -288,6 +289,112 @@
       <!-- 按 region 分组的列表 -->
       <div id="memoGroups"><div class="muted" style="padding:14px">暂无备忘录，先添加一个 alpha</div></div>
     </section>
+
+    <!-- ============ Osmosis 分配器 ============ -->
+    <section id="sec-osmosis" class="section">
+      <div class="page-head">
+        <div>
+          <h1 class="page-title">Osmosis 分配器</h1>
+          <p class="page-sub">按 [Region × Delay] 自动挑选、分配 Osmosis 信心分</p>
+        </div>
+      </div>
+
+      <!-- 控制面板 -->
+      <div class="card" style="margin-bottom:16px">
+        <div class="card-body" style="padding:14px 18px">
+          <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-end">
+            <div>
+              <div class="conc-label" style="margin-bottom:6px">Region</div>
+              <select id="osmosisRegion"
+                      style="min-width:110px;background:var(--bg-2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:6px;font:500 13px var(--mono)">
+                <option value="USA">USA</option>
+                <option value="CHN">CHN</option>
+                <option value="GBR">GBR</option>
+                <option value="JPN">JPN</option>
+                <option value="IND">IND</option>
+                <option value="EUR">EUR</option>
+                <option value="ASI">ASI</option>
+              </select>
+            </div>
+            <div>
+              <div class="conc-label" style="margin-bottom:6px">Delay</div>
+              <select id="osmosisDelay"
+                      style="min-width:80px;background:var(--bg-2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:6px;font:500 13px var(--mono)">
+                <option value="0">D0</option>
+                <option value="1" selected>D1</option>
+                <option value="3">D3</option>
+                <option value="5">D5</option>
+              </select>
+            </div>
+            <button class="btn btn-primary" id="btnOsmosisPreview">
+              <svg class="ico" viewBox="0 0 16 16"><path d="M5 3 12 8 5 13Z"/></svg>预览分配
+            </button>
+            <button class="btn" id="btnOsmosisAllocate" style="border-color:var(--warn);color:var(--warn)">
+              <svg class="ico" viewBox="0 0 16 16"><path d="M12 4 4 12M4 4h8v8"/></svg>写入平台
+            </button>
+            <label style="display:flex;gap:7px;align-items:center;font-size:12px;color:var(--text-dim);cursor:pointer">
+              <input type="checkbox" id="osmosisConfirm" style="width:14px;height:14px;accent-color:var(--accent)">
+              确认写入（会先清空本赛道旧分）
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <!-- 状态/进度 -->
+      <div id="osmosisStatus" class="card" style="margin-bottom:16px;display:none">
+        <div class="card-body" id="osmosisStatusBody" style="padding:14px 18px"></div>
+      </div>
+
+      <!-- Osmosis 是什么 -->
+      <button class="btn" id="btnOsmosisRulesToggle" style="margin-bottom:10px">
+        <svg class="ico" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7"/><path d="M8 7v4M8 5h0"/></svg>Osmosis 是什么
+      </button>
+      <div id="osmosisRules" class="card" style="margin-bottom:16px;display:none">
+        <div class="card-body" id="osmosisRulesBody" style="padding:14px 18px">
+          <div class="muted">加载中…</div>
+        </div>
+      </div>
+
+      <!-- 结果区 -->
+      <div id="osmosisResult" style="display:none">
+        <div class="card" style="margin-bottom:16px">
+          <div class="card-title"><div class="card-title-icon"><svg class="ico" viewBox="0 0 16 16"><path d="M4 11h8M4 8h8M4 5h8"/></svg></div>分配概览</div>
+          <div class="card-body" id="osmosisOverview" style="padding:14px 18px"></div>
+        </div>
+
+        <div class="card" style="margin-bottom:16px">
+          <div class="card-title"><div class="card-title-icon"><svg class="ico" viewBox="0 0 16 16"><path d="M3 3v10h10V3H3z"/></svg></div>分数可视化</div>
+          <div class="card-body" id="osmosisChart" style="padding:14px 18px"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-title"><div class="card-title-icon"><svg class="ico" viewBox="0 0 16 16"><path d="M4 4a5 5 0 0 1 9 3"/><path d="M13 3v4h-4"/></svg></div>已选 Alpha</div>
+          <div class="card-body" style="padding:0">
+            <div style="overflow:auto;max-height:560px">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Alpha ID</th>
+                    <th>类型</th>
+                    <th>分数</th>
+                    <th>质量分</th>
+                    <th>Sharpe</th>
+                    <th>Fitness</th>
+                    <th>Margin</th>
+                    <th>Tvr</th>
+                    <th>SelfCorr</th>
+                    <th>ProdCorr</th>
+                    <th>入选原因</th>
+                  </tr>
+                </thead>
+                <tbody id="osmosisTableBody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
   </main>
 
   <!-- 提示词编辑弹窗 -->

@@ -992,12 +992,168 @@ $('btnPromptDelete').addEventListener('click', async () => {
   } catch (e) { toast('删除失败：' + e.message, 'error'); }
 });
 
+// ====== Osmosis 分配器 ======
+async function loadOsmosisRules() {
+  try {
+    const r = await api('/api/osmosis/rules');
+    if (!r.ok) { $('osmosisRulesBody').innerHTML = `<div class="muted">规则加载失败：${r.error || '未知错误'}</div>`; return; }
+    renderOsmosisRules(r.rules);
+  } catch (e) {
+    $('osmosisRulesBody').innerHTML = `<div class="muted">规则加载失败：${e.message}</div>`;
+  }
+}
+
+function renderOsmosisRules(rules) {
+  const listItems = (arr) => arr.map(x => `<li><strong>${x.title}：</strong>${x.content}</li>`).join('');
+  const timelineItems = (arr) => arr.map(x => `<li><strong>${x.day}：</strong>${x.event}</li>`).join('');
+  $('osmosisRulesBody').innerHTML = `
+    <div style="font-size:13px;line-height:1.7;color:var(--text)">
+      <p style="margin-bottom:12px;padding:10px;background:var(--bg-2);border-left:3px solid var(--accent);border-radius:4px">${rules.summary}</p>
+      <h3 style="font-size:14px;color:var(--accent);margin:14px 0 8px">三条硬规则 + 两个时间点</h3>
+      <ul style="padding-left:18px;margin:0 0 12px;color:var(--text-dim)">${listItems(rules.rules)}</ul>
+      <h3 style="font-size:14px;color:var(--accent);margin:14px 0 8px">它怎么影响你的收入</h3>
+      <ul style="padding-left:18px;margin:0 0 12px;color:var(--text-dim)">${listItems(rules.impact)}</ul>
+      <h3 style="font-size:14px;color:var(--accent);margin:14px 0 8px">一次分配的时间线</h3>
+      <ul style="padding-left:18px;margin:0 0 12px;color:var(--text-dim)">${timelineItems(rules.timeline)}</ul>
+      <p style="margin-top:14px;padding:10px;background:var(--bg-2);border-radius:4px;color:var(--text-dim);font-size:12px">${rules.golden_rule}</p>
+    </div>
+  `;
+}
+
+async function previewOsmosis() {
+  const region = $('osmosisRegion').value;
+  const delay = parseInt($('osmosisDelay').value, 10);
+  $('osmosisStatus').style.display = 'block';
+  $('osmosisStatusBody').innerHTML = `<span class="live-tag on" style="margin-right:8px">RUNNING</span> 正在计算 ${region}/D${delay} 的 Osmosis 分配方案…`;
+  $('osmosisResult').style.display = 'none';
+  try {
+    const r = await api('/api/osmosis/preview', {
+      method: 'POST',
+      body: JSON.stringify({ region, delay }),
+    });
+    if (!r.ok) {
+      $('osmosisStatusBody').innerHTML = `<span class="live-tag" style="margin-right:8px;background:var(--neg-soft);color:var(--bad)">FAIL</span> ${r.error || '预览失败'}`;
+      return;
+    }
+    renderOsmosisPlan(r);
+    $('osmosisStatusBody').innerHTML = `<span class="live-tag on" style="margin-right:8px">DONE</span> ${r.scope} 分配方案已生成，共 ${r.selected_count} 个 alpha，总分 ${r.total_points.toLocaleString()}。`;
+    $('osmosisResult').style.display = 'block';
+  } catch (e) {
+    $('osmosisStatusBody').innerHTML = `<span class="live-tag" style="margin-right:8px;background:var(--neg-soft);color:var(--bad)">FAIL</span> ${e.message}`;
+  }
+}
+
+async function allocateOsmosis() {
+  if (!$('osmosisConfirm').checked) {
+    toast('请先勾选「确认写入」才能执行写入', 'error');
+    return;
+  }
+  const region = $('osmosisRegion').value;
+  const delay = parseInt($('osmosisDelay').value, 10);
+  if (!confirm(`确认把 ${region}/D${delay} 的 Osmosis 方案写入平台？这会先清空本赛道旧分。`)) return;
+  $('osmosisStatus').style.display = 'block';
+  $('osmosisStatusBody').innerHTML = `<span class="live-tag on" style="margin-right:8px">WRITING</span> 正在写入 ${region}/D${delay}…`;
+  try {
+    const r = await api('/api/osmosis/allocate', {
+      method: 'POST',
+      body: JSON.stringify({ region, delay, confirm: true }),
+    });
+    if (!r.ok) {
+      $('osmosisStatusBody').innerHTML = `<span class="live-tag" style="margin-right:8px;background:var(--neg-soft);color:var(--bad)">FAIL</span> ${r.error || '写入失败'}`;
+      return;
+    }
+    const cleared = r.cleared || {};
+    $('osmosisStatusBody').innerHTML = `
+      <span class="live-tag on" style="margin-right:8px">DONE</span>
+      已写入 ${r.scope}：清空旧分 ${cleared.cleared || 0} 个，写入新分 ${r.written || 0} 个，失败 ${r.failed || 0} 个。
+    `;
+  } catch (e) {
+    $('osmosisStatusBody').innerHTML = `<span class="live-tag" style="margin-right:8px;background:var(--neg-soft);color:var(--bad)">FAIL</span> ${e.message}`;
+  }
+}
+
+function renderOsmosisPlan(plan) {
+  const totalOk = plan.total_assigned === plan.total_points;
+  $('osmosisOverview').innerHTML = `
+    <div class="kv-grid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));font-size:13px">
+      <div><span>赛道</span><span style="font-family:var(--mono)">${plan.scope}</span></div>
+      <div><span>候选数</span><span>${plan.candidate_count}</span></div>
+      <div><span>通过硬过滤</span><span>${plan.eligible_count}</span></div>
+      <div><span>最终选中</span><span>${plan.selected_count}</span></div>
+      <div><span>Regular</span><span>${plan.regular_count}</span></div>
+      <div><span>Super</span><span>${plan.super_count}</span></div>
+      <div><span>已分配总分</span><span style="color:${totalOk ? 'var(--good)' : 'var(--bad)'}">${plan.total_assigned.toLocaleString()} / ${plan.total_points.toLocaleString()}</span></div>
+    </div>
+  `;
+  renderOsmosisTable(plan.selected);
+  renderOsmosisChart(plan.selected);
+}
+
+function renderOsmosisTable(selected) {
+  const html = selected.map(a => `
+    <tr>
+      <td style="font-family:var(--mono);font-size:12px">${a.alpha_id}</td>
+      <td><span style="display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;background:${a.type === 'SUPER' ? 'var(--accent-2)' : 'var(--accent)'};color:#081018">${a.type === 'SUPER' ? 'SUPER' : 'REG'}</span></td>
+      <td style="font-weight:600;color:var(--text)">${(a.osmosis_new ?? 0).toLocaleString()}</td>
+      <td>${fmtNum(a.adjusted_quality, 3)}</td>
+      <td>${fmtSharpe(a.sharpe)}</td>
+      <td>${fmtNum(a.fitness)}</td>
+      <td>${fmtNum(a.margin)}</td>
+      <td>${fmtNum(a.turnover, 3)}</td>
+      <td>${fmtNum(a.self_corr)}</td>
+      <td>${fmtNum(a.prod_corr)}</td>
+      <td><span class="muted">${a.selection_reason === 'filler' ? '补位' : '主选'}</span></td>
+    </tr>
+  `).join('');
+  $('osmosisTableBody').innerHTML = html || '<tr><td colspan="11" class="muted" style="text-align:center;padding:14px">无数据</td></tr>';
+}
+
+function renderOsmosisChart(selected) {
+  if (!selected || selected.length === 0) {
+    $('osmosisChart').innerHTML = '<div class="muted">无数据</div>';
+    return;
+  }
+  const maxPoints = Math.max(...selected.map(a => a.osmosis_new || 0));
+  const rows = selected.map(a => {
+    const pct = maxPoints > 0 ? (a.osmosis_new / maxPoints) * 100 : 0;
+    const color = a.type === 'SUPER' ? 'var(--accent-2)' : 'var(--accent)';
+    return `
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;font-size:12px">
+        <div style="width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mono);color:var(--text-dim)" title="${a.alpha_id}">${a.alpha_id}</div>
+        <div style="flex:1;background:var(--bg-3);height:18px;border-radius:3px;overflow:hidden;position:relative">
+          <div style="width:${pct.toFixed(1)}%;background:${color};height:100%;border-radius:3px;transition:width .4s"></div>
+        </div>
+        <div style="width:60px;text-align:right;color:var(--text);font-weight:500">${(a.osmosis_new || 0).toLocaleString()}</div>
+      </div>
+    `;
+  }).join('');
+  $('osmosisChart').innerHTML = `
+    <div style="display:flex;gap:16px;margin-bottom:12px;font-size:12px;color:var(--text-dim)">
+      <div><span style="display:inline-block;width:10px;height:10px;background:var(--accent);border-radius:2px;margin-right:6px"></span>Regular</div>
+      <div><span style="display:inline-block;width:10px;height:10px;background:var(--accent-2);border-radius:2px;margin-right:6px"></span>Super</div>
+    </div>
+    ${rows}
+  `;
+}
+
+$('btnOsmosisPreview').addEventListener('click', previewOsmosis);
+$('btnOsmosisAllocate').addEventListener('click', allocateOsmosis);
+$('btnOsmosisRulesToggle').addEventListener('click', () => {
+  const el = $('osmosisRules');
+  const visible = el.style.display !== 'none';
+  el.style.display = visible ? 'none' : 'block';
+  $('btnOsmosisRulesToggle').innerHTML = visible
+    ? '<svg class="ico" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7"/><path d="M8 7v4M8 5h0"/></svg>Osmosis 是什么'
+    : '<svg class="ico" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7"/><path d="M5 8h6"/></svg>收起 Osmosis 规则';
+});
+
 // ====== Init ======
 loadStats();
 loadBatches();
 loadConcurrency();
 loadMemos();
 loadPrompts();
+loadOsmosisRules();
 refreshSyncStatus().then(running => {
   // 刷新页面后若后端同步仍在运行，自动恢复进度轮询（定时器随页面销毁）
   if (running && !window._syncTimer) window._syncTimer = setInterval(refreshSyncStatus, 1500);
@@ -1005,12 +1161,13 @@ refreshSyncStatus().then(running => {
 connectWS();
 
 // ====== 锚点 active 状态跟随滚动 ======
-// 物理顺序 → 导航锚点索引（导航：总览0 / PnL同步1 / AI批次2 / 备忘录3 / 设置4）
+// 物理顺序 → 导航锚点索引（导航：总览0 / PnL同步1 / AI批次2 / 备忘录3 / 设置4 / Osmosis5）
 const _sectionAnchor = [
   ['sec-dashboard', 0],
   ['sec-concurrency', 1], // 同步内容在并发区里
   ['sec-batches', 2],
   ['sec-memo', 3],
+  ['sec-osmosis', 5],
 ];
 const _sections = _sectionAnchor
   .map(([id]) => document.getElementById(id))
