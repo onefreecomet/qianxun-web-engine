@@ -1023,13 +1023,18 @@ function renderOsmosisRules(rules) {
 async function previewOsmosis() {
   const region = $('osmosisRegion').value;
   const delay = parseInt($('osmosisDelay').value, 10);
+  const useRealCorr = $('osmosisRealCorr').checked;
   $('osmosisStatus').style.display = 'block';
-  $('osmosisStatusBody').innerHTML = `<span class="live-tag on" style="margin-right:8px">RUNNING</span> 正在计算 ${region}/D${delay} 的 Osmosis 分配方案…`;
+  $('osmosisStatusBody').innerHTML = `<span class="live-tag on" style="margin-right:8px">RUNNING</span> 正在计算 ${region}/D${delay} 的 Osmosis 分配方案…${useRealCorr ? '（真实相关性模式，逐个 alpha 拉取，请耐心）' : ''}`;
   $('osmosisResult').style.display = 'none';
   try {
     const r = await api('/api/osmosis/preview', {
       method: 'POST',
-      body: JSON.stringify({ region, delay }),
+      body: JSON.stringify({
+        region,
+        delay,
+        fetch_external_correlations: useRealCorr,
+      }),
     });
     if (!r.ok) {
       $('osmosisStatusBody').innerHTML = `<span class="live-tag" style="margin-right:8px;background:var(--neg-soft);color:var(--bad)">FAIL</span> ${r.error || '预览失败'}`;
@@ -1088,7 +1093,18 @@ function renderOsmosisPlan(plan) {
       ${metricCard('分配总分', `<span style="color:${totalOk ? 'var(--good)' : 'var(--bad)'}">${plan.total_assigned.toLocaleString()}</span>`, totalOk ? '已凑满' : `目标 ${plan.total_points.toLocaleString()}`)}
       ${metricCard('加权 SHARPE', fmtSharpe(plan.weighted_sharpe), `平均 ${fmtSharpe(plan.avg_sharpe)}`)}
       ${metricCard('加权 MARGIN', fmtNum(plan.weighted_margin, 4), `加权换手 ${fmtNum(plan.weighted_turnover, 3)}`)}
-      ${metricCard('最大两两相关', fmtNum(plan.max_pairwise_corr, 3), '基于 code signature')}
+      ${(() => {
+        const src = plan.correlation_source;
+        const real = src === 'platform';
+        const unavailable = src === 'unavailable';
+        return metricCard(
+          real ? '最大两两相关' : '最大代码相似度',
+          fmtNum(plan.max_pairwise_corr, 3),
+          real
+            ? `平台真实相关性（${plan.correlation_fetched} 个 alpha）`
+            : (unavailable ? '平台暂无相关性数据，退回结构相似' : '表达式结构相似，非 PnL 相关'),
+        );
+      })()}
       ${metricCard('当前已分配', plan.currently_assigned ?? 0, '个 alpha 有旧分')}
     </div>
   `;

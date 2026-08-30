@@ -838,6 +838,8 @@ async def osmosis_preview(req: Request) -> dict:
         pass
     region = str(body.get("region", "USA")).strip().upper()
     delay = int(body.get("delay", 1))
+    # 真实相关性：逐个 alpha 调平台 correlations/self，慢很多，默认关闭
+    use_real_corr = bool(body.get("fetch_external_correlations", False))
 
     try:
         client = _client()
@@ -845,7 +847,11 @@ async def osmosis_preview(req: Request) -> dict:
         return {"ok": False, "error": f"BRAIN 客户端初始化失败：{e}"}
 
     try:
-        config = OsmosisConfig(region=region, delay=delay)
+        config = OsmosisConfig(
+            region=region,
+            delay=delay,
+            fetch_external_correlations=use_real_corr,
+        )
         plan = build_allocation_plan(client, region, delay, config=config)
         if plan.get("ok"):
             try:

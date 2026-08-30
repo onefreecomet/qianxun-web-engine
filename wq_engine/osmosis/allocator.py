@@ -440,10 +440,86 @@ def code_similarity(sig_a: str, sig_b: str) -> float:
     return len(set_a & set_b) / len(set_a | set_b)
 
 
+def fetch_external_correlations(client: Any, alpha_id: str, limit: int = 1000) -> dict[str, float]:
+    """拉平台真实两两相关性：GET /alphas/{id}/correlations/self。
+
+    返回 {other_alpha_id: correlation}；接口 404 表示暂不可查。
+    """
+    records: list[dict[str, Any]] = []
+    offset = 0
+    while True:
+        url = f"/alphas/{alpha_id}/correlations/self?limit={limit}&offset={offset}"
+        resp = client._request_with_retry(
+            "GET", url, op_name=f"correlations/self[{alpha_id}][{offset}]",
+        )
+        if resp.status_code == 404:
+            break
+        data = resp.json() if resp.text else {}
+        results = data.get("results", []) if isinstance(data, dict) else []
+        records.extend([
+            {
+                "alpha_id": r.get("alpha_id") or r.get("id"),
+                "correlation": r.get("correlation"),
+            }
+            for r in results
+            if isinstance(r, dict)
+        ])
+        if len(results) < limit:
+            break
+        offset += limit
+
+    output: dict[str, float] = {}
+    for row in records:
+        aid = row.get("alpha_id")
+        if not aid:
+            continue
+        try:
+            output[str(aid)] = float(row.get("correlation"))
+        except (TypeError, ValueError):
+            continue
+    return output
+
+
+def fetch_correlation_lookup(
+    client: Any,
+    alpha_ids: list[str],
+    progress_cb: Callable[[str, int, int, int, int], None] | None = None,
+) -> dict[str, dict[str, float]]:
+    """批量拉真实相关性，构建 {alpha_id: {other_id: corr}}。"""
+    lookup: dict[str, dict[str, float]] = {}
+    total = len(alpha_ids)
+    for idx, aid in enumerate(alpha_ids):
+        try:
+            lookup[str(aid)] = fetch_external_correlations(client, aid)
+        except Exception as e:
+            logger.warning("相关性拉取失败 alpha={}：{}", aid, e)
+            lookup[str(aid)] = {}
+        if progress_cb:
+            progress_cb("correlations", total, 0, idx + 1, 0)
+    return lookup
+
+
+def lookup_correlation(
+    correlation_lookup: dict[str, dict[str, float]] | None,
+    alpha_id: str,
+    other_id: str,
+) -> float | None:
+    if not correlation_lookup:
+        return None
+    forward = correlation_lookup.get(alpha_id) or {}
+    if other_id in forward:
+        return float(forward[other_id])
+    backward = correlation_lookup.get(other_id) or {}
+    if alpha_id in backward:
+        return float(backward[alpha_id])
+    return None
+
+
 def max_selected_corr(
     row: pd.Series,
     selected: list[pd.Series],
     corr_matrix: pd.DataFrame,
+    correlation_lookup: dict[str, dict[str, float]] | None = None,
 ) -> float:
     if not selected:
         return 0.0
@@ -451,7 +527,10 @@ def max_selected_corr(
     vals: list[float] = []
     for sel in selected:
         sid = str(sel["alpha_id"])
-        if (
+        real = lookup_correlation(correlation_lookup, alpha_id, sid)
+        if real is not None:
+            vals.append(abs(real))
+        elif (
             not corr_matrix.empty
             and alpha_id in corr_matrix.index
             and sid in corr_matrix.columns
@@ -468,6 +547,7 @@ def greedy_select(
     max_count: int,
     corr_matrix: pd.DataFrame,
     config: OsmosisConfig,
+    correlation_lookup: dict[str, dict[str, float]] | None = None,
 ) -> pd.DataFrame:
     if df.empty or target_count <= 0:
         return pd.DataFrame(columns=df.columns)
@@ -479,7 +559,7 @@ def greedy_select(
     for _, row in candidates.iterrows():
         if len(selected) >= max_count:
             break
-        max_corr = max_selected_corr(row, selected, corr_matrix)
+        max_corr = max_selected_corr(row, selected, corr_matrix, correlation_lookup)
         if max_corr <= config.max_pnl_corr:
             row = row.copy()
             row["diversity_penalty"] = max(0.0, max_corr - config.soft_pnl_corr)
@@ -537,7 +617,11 @@ def choose_type_counts(df: pd.DataFrame, config: OsmosisConfig) -> tuple[int, in
     return regular_target, super_target
 
 
-def select_portfolio(df: pd.DataFrame, config: OsmosisConfig) -> pd.DataFrame:
+def select_portfolio(
+    df: pd.DataFrame,
+    config: OsmosisConfig,
+    correlation_lookup: dict[str, dict[str, float]] | None = None,
+) -> pd.DataFrame:
     if df.empty:
         return df
 
@@ -550,7 +634,9 @@ def select_portfolio(df: pd.DataFrame, config: OsmosisConfig) -> pd.DataFrame:
             continue
         max_count = config.max_alpha_count if alpha_type == "REGULAR" else config.super_max_alpha_count
         corr_matrix = build_corr_matrix(pool)
-        selected_chunks.append(greedy_select(pool, target, max_count, corr_matrix, config))
+        selected_chunks.append(
+            greedy_select(pool, target, max_count, corr_matrix, config, correlation_lookup)
+        )
 
     if not selected_chunks:
         return pd.DataFrame(columns=df.columns)
@@ -853,6 +939,28 @@ def max_pairwise_code_similarity(selected: pd.DataFrame) -> float:
     return max_sim
 
 
+def max_pairwise_real_correlation(
+    selected: pd.DataFrame,
+    correlation_lookup: dict[str, dict[str, float]] | None,
+) -> float:
+    """基于平台真实相关性计算已选 alpha 间最大两两相关（0~1）。
+
+    查不到的配对会退回到 code_similarity 近似。
+    """
+    if selected.empty or len(selected) < 2:
+        return 0.0
+    ids = selected["alpha_id"].astype(str).tolist()
+    sigs = selected["code_signature"].fillna("").astype(str).tolist()
+    max_corr = 0.0
+    for i in range(len(ids)):
+        for j in range(i + 1, len(ids)):
+            real = lookup_correlation(correlation_lookup, ids[i], ids[j])
+            value = abs(real) if real is not None else code_similarity(sigs[i], sigs[j])
+            if value > max_corr:
+                max_corr = value
+    return max_corr
+
+
 def _to_json_value(value: Any) -> Any:
     """把 DataFrame 单元格值转为 JSON 可序列化。"""
     if value is None:
@@ -909,7 +1017,21 @@ def build_allocation_plan(
     if progress_cb:
         progress_cb("candidates", len(all_df), len(eligible), 0, 0)
 
-    selected = select_portfolio(eligible, config)
+    # 真实相关性（可选，慢）：对每个通过硬过滤的 alpha 调平台 correlations/self
+    correlation_lookup: dict[str, dict[str, float]] = {}
+    correlation_source = "code_similarity"
+    correlation_fetched = 0
+    if config.fetch_external_correlations and not eligible.empty:
+        correlation_lookup = fetch_correlation_lookup(
+            client,
+            eligible["alpha_id"].astype(str).tolist(),
+            progress_cb=progress_cb,
+        )
+        correlation_fetched = sum(1 for v in correlation_lookup.values() if v)
+        # 接口通但没有任何真实相关数据时，不能冒充平台真值
+        correlation_source = "platform" if correlation_fetched > 0 else "unavailable"
+
+    selected = select_portfolio(eligible, config, correlation_lookup)
     if config.fill_to_min_alpha_count:
         selected = ensure_minimum_selection(selected, all_df, config)
     selected = add_points(selected, config)
@@ -928,7 +1050,10 @@ def build_allocation_plan(
         avg_sharpe = float(selected["sharpe"].mean())
         avg_margin = float(selected["margin"].mean())
         avg_turnover = float(selected["turnover"].mean())
-        max_pairwise_corr = max_pairwise_code_similarity(selected)
+        if correlation_source == "platform":
+            max_pairwise_corr = max_pairwise_real_correlation(selected, correlation_lookup)
+        else:
+            max_pairwise_corr = max_pairwise_code_similarity(selected)
     else:
         weighted_sharpe = weighted_margin = weighted_turnover = 0.0
         avg_sharpe = avg_margin = avg_turnover = 0.0
@@ -953,5 +1078,7 @@ def build_allocation_plan(
         "avg_margin": avg_margin,
         "avg_turnover": avg_turnover,
         "max_pairwise_corr": max_pairwise_corr,
+        "correlation_source": correlation_source,
+        "correlation_fetched": correlation_fetched,
         "selected": selected_list,
     }
