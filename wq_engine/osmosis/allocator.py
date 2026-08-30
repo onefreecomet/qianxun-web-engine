@@ -217,6 +217,28 @@ def preferred_metric(preferred: dict[str, Any], fallback: dict[str, Any], key: s
     return to_float(fallback.get(key))
 
 
+def is_compensated_alpha(record: dict[str, Any]) -> bool:
+    """是否 compensated（平台才允许分配 Osmosis 分数）。
+
+    判据由平台报错反推 + 全量样本验证得出（USA/D1 共 53 个 alpha，
+    与「当前已有 osmosisPoints 的 alpha」交叉验证 100% 吻合）：
+      os.checks 含 name == 'COMPENSATED_ALPHA' → 非 compensated，写入会被拒：
+        {"osmosisPoints":["Cannot update Osmosis points for non-compensated alpha."]}
+      os.checks 不含该项 → compensated，可写。
+    os 块缺失或 checks 为空时，保守判为不可分配。
+    """
+    os_block = record.get("os")
+    if not isinstance(os_block, dict):
+        return False
+    checks = os_block.get("checks")
+    if not checks:
+        return False
+    for c in checks:
+        if isinstance(c, dict) and c.get("name") == "COMPENSATED_ALPHA":
+            return False
+    return True
+
+
 def flatten_alpha(record: dict[str, Any], region: str, delay: int) -> dict[str, Any]:
     """把 BRAIN alpha 记录拍平为 DataFrame 行。"""
     settings = record.get("settings") or {}
@@ -236,6 +258,7 @@ def flatten_alpha(record: dict[str, Any], region: str, delay: int) -> dict[str, 
         "dateCreated": record.get("dateCreated"),
         "color": record.get("color"),
         "osmosisPoints": to_float(record.get("osmosisPoints")),
+        "compensated": is_compensated_alpha(record),
         "metric_source": metric_source,
         "sharpe": preferred_metric(metric_data, is_data, "sharpe"),
         "fitness": preferred_metric(metric_data, is_data, "fitness"),
@@ -1012,6 +1035,25 @@ def build_allocation_plan(
 
     all_df = pd.DataFrame([flatten_alpha(r, region, delay) for r in records])
     all_df = add_base_scores(all_df)
+
+    # Osmosis 硬门槛：平台只接受 compensated alpha 分配分数，非 compensated 写入
+    # 会被拒（Cannot update Osmosis points for non-compensated alpha）。
+    # 先按此收敛候选池，否则会选出大量根本写不进去的组合。
+    compensated_count = 0
+    if not all_df.empty and "compensated" in all_df.columns:
+        mask = all_df["compensated"].astype(bool)
+        compensated_count = int(mask.sum())
+        all_df = all_df[mask].reset_index(drop=True)
+        if all_df.empty:
+            return {
+                "ok": False,
+                "scope": scope,
+                "error": (
+                    f"{scope} 没有 compensated alpha：平台只允许给已获补偿的 alpha "
+                    f"分配 Osmosis 分数（{len(records)} 个已提交 alpha 全部是 non-compensated）"
+                ),
+            }
+
     eligible = apply_hard_filters(all_df, config)
 
     if progress_cb:
@@ -1065,7 +1107,8 @@ def build_allocation_plan(
         "region": clean_region(region),
         "delay": clean_delay(delay),
         "total_points": config.total_points,
-        "candidate_count": len(all_df),
+        "candidate_count": len(records),
+        "compensated_count": compensated_count,
         "eligible_count": len(eligible),
         "selected_count": len(selected),
         "regular_count": regular_count,
