@@ -879,6 +879,51 @@ async def osmosis_rules() -> dict:
     return {"ok": True, "rules": OSMOSIS_RULES}
 
 
+@app.get("/api/osmosis/tracks")
+async def osmosis_tracks() -> dict:
+    """枚举账号下实际有已提交 alpha 的（region/delay）赛道。
+
+    下拉框不再硬编码 region 列表：硬编码漏过 GLB、HKG。
+    这里拉全部已提交 alpha 后按 settings 分组，并统计各赛道
+    compensated（可分配）数量，便于直接挑可写的赛道。
+    """
+    try:
+        client = _client()
+    except Exception as e:
+        return {"ok": False, "error": f"BRAIN 客户端初始化失败：{e}"}
+    try:
+        records = client.list_all_submitted_alphas(max_scan=3000)
+    except Exception as e:
+        return {"ok": False, "error": f"拉取 alpha 列表失败：{e}"}
+
+    from wq_engine.osmosis.allocator import is_compensated_alpha
+
+    buckets: dict[tuple[str, int], dict] = {}
+    for r in records:
+        settings = r.get("settings") or {}
+        region = str(settings.get("region") or "").strip().upper()
+        if not region:
+            continue
+        try:
+            delay = int(settings.get("delay") or 0)
+        except (TypeError, ValueError):
+            delay = 0
+        key = (region, delay)
+        b = buckets.setdefault(
+            key,
+            {"region": region, "delay": delay, "total": 0, "compensated": 0},
+        )
+        b["total"] += 1
+        if is_compensated_alpha(r):
+            b["compensated"] += 1
+
+    tracks = sorted(
+        buckets.values(),
+        key=lambda x: (-x["compensated"], -x["total"], x["region"], x["delay"]),
+    )
+    return {"ok": True, "count": len(tracks), "tracks": tracks}
+
+
 @app.post("/api/osmosis/preview")
 async def osmosis_preview(req: Request) -> dict:
     """预览 Osmosis 分配方案（不写平台）。"""

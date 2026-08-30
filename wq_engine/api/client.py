@@ -650,6 +650,51 @@ class APIClient:
                 break
         return all_results
 
+    def list_all_submitted_alphas(
+        self,
+        *,
+        max_scan: int = 3000,
+        page_size: int = 100,
+        hidden: bool | None = False,
+    ) -> list[dict]:
+        """拉取账号下全部已提交 alpha（不按 region/delay 过滤）。
+
+        同 list_scope_alphas，但 URL 不带 settings.region/settings.delay，
+        用于动态枚举账号实际涉及的赛道，避免 region 列表硬编码漏项
+        （例如 GLB、HKG 曾被漏掉）。
+        """
+        all_results: list[dict] = []
+        seen: set[str] = set()
+        offset = 0
+        limit = page_size
+
+        while offset < max_scan:
+            hidden_part = f"&hidden={'true' if hidden else 'false'}" if hidden is not None else ""
+            url = (
+                f"/users/self/alphas?limit={limit}&offset={offset}"
+                f"&order=-dateSubmitted{hidden_part}"
+                f"&status%21=UNSUBMITTED%1FIS_FAIL"
+            )
+            resp = self._request_with_retry(
+                "GET", url, op_name=f"list_all_submitted_alphas[{offset}]",
+            )
+            data = resp.json()
+            results = data.get("results", [])
+            if not results:
+                break
+            for a in results:
+                aid = a.get("id")
+                if not aid or aid in seen:
+                    continue
+                seen.add(aid)
+                all_results.append(a)
+            if len(results) < limit:
+                break
+            offset += len(results)
+            if offset >= max_scan:
+                break
+        return all_results
+
     def get_alpha_details(self, alpha_id: str) -> dict:
         """单 alpha 详情。"""
         resp = self._request_with_retry(

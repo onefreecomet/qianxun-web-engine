@@ -1020,6 +1020,31 @@ function renderOsmosisRules(rules) {
   `;
 }
 
+async function loadOsmosisTracks() {
+  // 动态填充赛道下拉框：硬编码 region 列表漏过 GLB、HKG，
+  // 改为从平台拉账号实际有 alpha 的（region/delay）组合。
+  const sel = $('osmosisRegion');
+  try {
+    const r = await api('/api/osmosis/tracks');
+    if (!r.ok || !r.tracks || r.tracks.length === 0) return; // 降级：保留静态选项
+    const prev = sel.value;
+    sel.innerHTML = r.tracks.map(t => {
+      const label = `${t.region} / D${t.delay} · 可分配 ${t.compensated}/${t.total}`;
+      return `<option value="${t.region}" data-delay="${t.delay}">${label}</option>`;
+    }).join('');
+    const match = r.tracks.find(t => t.region === prev);
+    if (match) sel.value = prev;
+    $('osmosisDelay').value = String(match ? match.delay : r.tracks[0].delay);
+  } catch (e) {
+    // 静默降级，保留 HTML 里的静态选项
+  }
+}
+
+$('osmosisRegion').addEventListener('change', () => {
+  const opt = $('osmosisRegion').selectedOptions[0];
+  if (opt && opt.dataset.delay) $('osmosisDelay').value = opt.dataset.delay;
+});
+
 async function previewOsmosis() {
   const region = $('osmosisRegion').value;
   const delay = parseInt($('osmosisDelay').value, 10);
@@ -1208,6 +1233,7 @@ loadConcurrency();
 loadMemos();
 loadPrompts();
 loadOsmosisRules();
+loadOsmosisTracks();
 refreshSyncStatus().then(running => {
   // 刷新页面后若后端同步仍在运行，自动恢复进度轮询（定时器随页面销毁）
   if (running && !window._syncTimer) window._syncTimer = setInterval(refreshSyncStatus, 1500);
