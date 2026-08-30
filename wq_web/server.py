@@ -780,16 +780,31 @@ _WRITE_INTERVAL = 0.4
 def _patch_alpha_points(alpha_id: str, points: int | None) -> dict:
     """设置/清空某个 alpha 的 osmosis 分数。
 
-    payload 用完整属性包（与 set_alpha_properties 一致）：只发单个裸字段
-    osmosis_points 曾被平台以 400 Bad Request 拒绝。
+    ⚠️ 字段名与 payload 结构照抄 BRAIN 前端 JS 的真实请求（platform 静态 js
+    1578_3e25713c 反查得到），不要凭 API 命名惯例猜：
+      - 字段名是 camelCase `osmosisPoints`，**不是** snake_case osmosis_points
+      - 必须发完整属性包，其中 `regular` 是对象 `{description: ...}`，
+        只发裸的 osmosis 字段会被 400 Bad Request
+      - 平台校验值必须是 1~100000 的整数，null 表示清空
+      - 网页只在 `osmosisOptions && isSubmitted` 时才带该字段，
+        因此本函数只应用于已提交的 alpha
     """
     client = _client()
+    if points is None:
+        pts = None
+    else:
+        pts = int(points)
+        if not 1 <= pts <= 100000:
+            raise ValueError(
+                f"osmosis 分数必须落在 1~100000，收到 {pts}（alpha={alpha_id}）"
+            )
     payload = {
         "color": None,
         "name": None,
-        "tags": ["ace_tag"],
+        "tags": [],
         "category": None,
-        "osmosis_points": None if points is None else int(points),
+        "regular": {"description": None},
+        "osmosisPoints": pts,
     }
     resp = client._request_with_retry(
         "PATCH",
@@ -947,6 +962,9 @@ async def osmosis_allocate(req: Request) -> dict:
             alpha_id = row.get("alpha_id")
             points = row.get("osmosis_new")
             if not alpha_id or points is None:
+                continue
+            # 平台要求 1~100000，未分到分的 alpha 直接跳过，别发无效请求
+            if int(points) <= 0:
                 continue
             if idx > 0:
                 time.sleep(_WRITE_INTERVAL)
