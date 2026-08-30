@@ -1068,9 +1068,26 @@ async function allocateOsmosis() {
       return;
     }
     const cleared = r.cleared || {};
+    const writes = r.writes || [];
+    const fails = writes.filter(w => !w.ok);
+    let failHtml = '';
+    if (fails.length > 0) {
+      failHtml = `
+        <div style="margin-top:12px;max-height:260px;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:10px;background:var(--bg-1)">
+          <div style="margin-bottom:8px;color:var(--text-dim);font-size:12px">失败详情（${fails.length} 个）：</div>
+          ${fails.map(w => `
+            <div style="margin-bottom:10px;font-family:var(--mono);font-size:12px;line-height:1.4">
+              <div style="color:var(--bad)">${w.alpha_id}${w.status_code ? ` · HTTP ${w.status_code}` : ''}</div>
+              <div style="color:var(--text-dim);white-space:pre-wrap">${(w.error || '').slice(0, 200)}${(w.response_body || '').slice(0, 200)}</div>
+            </div>
+          `).join('')}
+        </div>
+      `;
+    }
     $('osmosisStatusBody').innerHTML = `
       <span class="live-tag on" style="margin-right:8px">DONE</span>
       已写入 ${r.scope}：清空旧分 ${cleared.cleared || 0} 个，写入新分 ${r.written || 0} 个，失败 ${r.failed || 0} 个。
+      ${failHtml}
     `;
   } catch (e) {
     $('osmosisStatusBody').innerHTML = `<span class="live-tag" style="margin-right:8px;background:var(--neg-soft);color:var(--bad)">FAIL</span> ${e.message}`;
