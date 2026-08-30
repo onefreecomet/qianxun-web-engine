@@ -211,6 +211,20 @@ bus = ProgressBus()
 # ---------------- 页面路由 ----------------
 
 
+def _static_version() -> str:
+    """静态资源版本号：取 app.js / style.css 最后修改时间。
+
+    前端 JS/CSS 改动后若 URL 不变，浏览器会一直用缓存，导致改了后端逻辑
+    前端却毫无变化（曾因此白测一轮）。用 mtime 做版本号，文件一改自动失效。
+    """
+    try:
+        js = (WEB_DIR / "static" / "app.js").stat().st_mtime
+        css = (WEB_DIR / "static" / "style.css").stat().st_mtime
+        return str(int(max(js, css)))
+    except OSError:
+        return "1"
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request) -> HTMLResponse:
     """单页应用入口，server-rendered shell + 客户端 JS 拉数据。"""
@@ -221,6 +235,7 @@ async def index(request: Request) -> HTMLResponse:
         context={
             "db_path": db_path,
             "version": "v81 web alpha",
+            "static_v": _static_version(),
         },
     )
 

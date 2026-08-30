@@ -6,7 +6,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/style.css?v={{ static_v }}">
 </head>
 <body>
   <header class="topbar">
@@ -307,13 +307,22 @@
               <div class="conc-label" style="margin-bottom:6px">Region</div>
               <select id="osmosisRegion"
                       style="min-width:110px;background:var(--bg-2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:6px;font:500 13px var(--mono)">
+                <!-- 静态兜底：页面加载后由 loadOsmosisTracks() 用
+                     /api/osmosis/tracks 的真实赛道列表覆盖（含可分配数）。
+                     这里保留完整 region 是为了接口失败时仍可选，别删。 -->
                 <option value="USA">USA</option>
-                <option value="CHN">CHN</option>
+                <option value="GLB">GLB</option>
                 <option value="GBR">GBR</option>
-                <option value="JPN">JPN</option>
                 <option value="IND">IND</option>
                 <option value="EUR">EUR</option>
+                <option value="CHN">CHN</option>
+                <option value="JPN">JPN</option>
                 <option value="ASI">ASI</option>
+                <option value="DEU">DEU</option>
+                <option value="HKG">HKG</option>
+                <option value="AMR">AMR</option>
+                <option value="KOR">KOR</option>
+                <option value="TWN">TWN</option>
               </select>
             </div>
             <div>
@@ -427,6 +436,6 @@
 
   <div id="toast" class="toast"></div>
 
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v={{ static_v }}"></script>
 </body>
 </html>
