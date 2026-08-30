@@ -839,6 +839,20 @@ def add_points(selected: pd.DataFrame, config: OsmosisConfig) -> pd.DataFrame:
     return out.sort_values("osmosis_new", ascending=False).reset_index(drop=True)
 
 
+def max_pairwise_code_similarity(selected: pd.DataFrame) -> float:
+    """基于 code_signature 计算已选 alpha 间最大两两相似度（0~1）。"""
+    if selected.empty or len(selected) < 2:
+        return 0.0
+    sigs = selected["code_signature"].fillna("").astype(str).tolist()
+    max_sim = 0.0
+    for i in range(len(sigs)):
+        for j in range(i + 1, len(sigs)):
+            sim = code_similarity(sigs[i], sigs[j])
+            if sim > max_sim:
+                max_sim = sim
+    return max_sim
+
+
 def _to_json_value(value: Any) -> Any:
     """把 DataFrame 单元格值转为 JSON 可序列化。"""
     if value is None:
@@ -862,6 +876,7 @@ def _serialize_row(row: pd.Series) -> dict[str, Any]:
         "os_sharpe", "os_fitness", "os_returns", "os_margin", "os_turnover", "os_drawdown",
         "is_sharpe", "is_fitness", "is_returns", "is_margin", "is_turnover", "is_drawdown",
         "self_corr", "prod_corr", "universe", "neutralization", "decay", "dateSubmitted",
+        "code_signature",
     ]
     out: dict[str, Any] = {}
     for col in keep:
@@ -904,6 +919,21 @@ def build_allocation_plan(
     regular_count = int((selected["type"] == "REGULAR").sum())
     super_count = int((selected["type"] == "SUPER").sum())
 
+    if not selected.empty:
+        total_new = float(selected["osmosis_new"].sum())
+        weights = selected["osmosis_new"].astype(float) / max(1.0, total_new)
+        weighted_sharpe = float((selected["sharpe"].fillna(0) * weights).sum())
+        weighted_margin = float((selected["margin"].fillna(0) * weights).sum())
+        weighted_turnover = float((selected["turnover"].fillna(0) * weights).sum())
+        avg_sharpe = float(selected["sharpe"].mean())
+        avg_margin = float(selected["margin"].mean())
+        avg_turnover = float(selected["turnover"].mean())
+        max_pairwise_corr = max_pairwise_code_similarity(selected)
+    else:
+        weighted_sharpe = weighted_margin = weighted_turnover = 0.0
+        avg_sharpe = avg_margin = avg_turnover = 0.0
+        max_pairwise_corr = 0.0
+
     return {
         "ok": True,
         "scope": scope,
@@ -916,5 +946,12 @@ def build_allocation_plan(
         "regular_count": regular_count,
         "super_count": super_count,
         "total_assigned": int(selected["osmosis_new"].sum()) if not selected.empty else 0,
+        "weighted_sharpe": weighted_sharpe,
+        "weighted_margin": weighted_margin,
+        "weighted_turnover": weighted_turnover,
+        "avg_sharpe": avg_sharpe,
+        "avg_margin": avg_margin,
+        "avg_turnover": avg_turnover,
+        "max_pairwise_corr": max_pairwise_corr,
         "selected": selected_list,
     }

@@ -1074,15 +1074,22 @@ async function allocateOsmosis() {
 
 function renderOsmosisPlan(plan) {
   const totalOk = plan.total_assigned === plan.total_points;
+  const metricCard = (label, value, sub) => `
+    <div class="metric-card">
+      <div class="metric-label">${label}</div>
+      <div class="metric-value">${value}</div>
+      ${sub ? `<div class="metric-sub">${sub}</div>` : ''}
+    </div>
+  `;
   $('osmosisOverview').innerHTML = `
-    <div class="kv-grid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));font-size:13px">
-      <div><span>赛道</span><span style="font-family:var(--mono)">${plan.scope}</span></div>
-      <div><span>候选数</span><span>${plan.candidate_count}</span></div>
-      <div><span>通过硬过滤</span><span>${plan.eligible_count}</span></div>
-      <div><span>最终选中</span><span>${plan.selected_count}</span></div>
-      <div><span>Regular</span><span>${plan.regular_count}</span></div>
-      <div><span>Super</span><span>${plan.super_count}</span></div>
-      <div><span>已分配总分</span><span style="color:${totalOk ? 'var(--good)' : 'var(--bad)'}">${plan.total_assigned.toLocaleString()} / ${plan.total_points.toLocaleString()}</span></div>
+    <div class="osmosis-metrics">
+      ${metricCard('作用域', `<span style="font-family:var(--mono);font-size:15px">${plan.scope}</span>`, `候选 ${plan.candidate_count}`)}
+      ${metricCard('入选 ALPHA', plan.selected_count, `REGULAR ${plan.regular_count} · SUPER ${plan.super_count}`)}
+      ${metricCard('分配总分', `<span style="color:${totalOk ? 'var(--good)' : 'var(--bad)'}">${plan.total_assigned.toLocaleString()}</span>`, totalOk ? '已凑满' : `目标 ${plan.total_points.toLocaleString()}`)}
+      ${metricCard('加权 SHARPE', fmtSharpe(plan.weighted_sharpe), `平均 ${fmtSharpe(plan.avg_sharpe)}`)}
+      ${metricCard('加权 MARGIN', fmtNum(plan.weighted_margin, 4), `加权换手 ${fmtNum(plan.weighted_turnover, 3)}`)}
+      ${metricCard('最大两两相关', fmtNum(plan.max_pairwise_corr, 3), '基于 code signature')}
+      ${metricCard('当前已分配', plan.currently_assigned ?? 0, '个 alpha 有旧分')}
     </div>
   `;
   renderOsmosisTable(plan.selected);
@@ -1093,7 +1100,7 @@ function renderOsmosisTable(selected) {
   const html = selected.map(a => `
     <tr>
       <td style="font-family:var(--mono);font-size:12px">${a.alpha_id}</td>
-      <td><span style="display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;background:${a.type === 'SUPER' ? 'var(--accent-2)' : 'var(--accent)'};color:#081018">${a.type === 'SUPER' ? 'SUPER' : 'REG'}</span></td>
+      <td><span class="type-badge ${a.type === 'SUPER' ? 'super' : 'regular'}">${a.type === 'SUPER' ? 'SUPER' : 'REG'}</span></td>
       <td style="font-weight:600;color:var(--text)">${(a.osmosis_new ?? 0).toLocaleString()}</td>
       <td>${fmtNum(a.adjusted_quality, 3)}</td>
       <td>${fmtSharpe(a.sharpe)}</td>
@@ -1109,30 +1116,33 @@ function renderOsmosisTable(selected) {
 }
 
 function renderOsmosisChart(selected) {
+  const chartEl = $('osmosisChart');
+  chartEl.innerHTML = '<p style="margin:0 0 14px;font-size:12px;color:var(--text-mute)">条形长度 = 分配分数；颜色区分 Regular / Super。</p>';
   if (!selected || selected.length === 0) {
-    $('osmosisChart').innerHTML = '<div class="muted">无数据</div>';
+    chartEl.innerHTML += '<div class="muted">无数据</div>';
     return;
   }
   const maxPoints = Math.max(...selected.map(a => a.osmosis_new || 0));
   const rows = selected.map(a => {
     const pct = maxPoints > 0 ? (a.osmosis_new / maxPoints) * 100 : 0;
-    const color = a.type === 'SUPER' ? 'var(--accent-2)' : 'var(--accent)';
+    const barClass = a.type === 'SUPER' ? 'osmosis-bar-super' : 'osmosis-bar-regular';
     return `
-      <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;font-size:12px">
-        <div style="width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mono);color:var(--text-dim)" title="${a.alpha_id}">${a.alpha_id}</div>
-        <div style="flex:1;background:var(--bg-3);height:18px;border-radius:3px;overflow:hidden;position:relative">
-          <div style="width:${pct.toFixed(1)}%;background:${color};height:100%;border-radius:3px;transition:width .4s"></div>
+      <div class="osmosis-bar-row">
+        <div class="osmosis-bar-label" title="${a.alpha_id}">${a.alpha_id}</div>
+        <div class="osmosis-bar-track">
+          <div class="osmosis-bar-fill ${barClass}" style="width:${pct.toFixed(1)}%"></div>
         </div>
-        <div style="width:60px;text-align:right;color:var(--text);font-weight:500">${(a.osmosis_new || 0).toLocaleString()}</div>
+        <div class="osmosis-bar-score">${(a.osmosis_new || 0).toLocaleString()}</div>
+        <div class="osmosis-bar-metric">${fmtSharpe(a.sharpe)}</div>
       </div>
     `;
   }).join('');
-  $('osmosisChart').innerHTML = `
-    <div style="display:flex;gap:16px;margin-bottom:12px;font-size:12px;color:var(--text-dim)">
-      <div><span style="display:inline-block;width:10px;height:10px;background:var(--accent);border-radius:2px;margin-right:6px"></span>Regular</div>
-      <div><span style="display:inline-block;width:10px;height:10px;background:var(--accent-2);border-radius:2px;margin-right:6px"></span>Super</div>
+  chartEl.innerHTML += `
+    <div class="osmosis-chart-legend">
+      <div><span class="osmosis-legend-dot regular"></span>Regular</div>
+      <div><span class="osmosis-legend-dot super"></span>Super</div>
     </div>
-    ${rows}
+    <div class="osmosis-chart-body">${rows}</div>
   `;
 }
 

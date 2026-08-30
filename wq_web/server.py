@@ -846,7 +846,17 @@ async def osmosis_preview(req: Request) -> dict:
 
     try:
         config = OsmosisConfig(region=region, delay=delay)
-        return build_allocation_plan(client, region, delay, config=config)
+        plan = build_allocation_plan(client, region, delay, config=config)
+        if plan.get("ok"):
+            try:
+                current_records = client.list_scope_alphas(region, delay, max_scan=config.max_alpha_scan)
+                plan["currently_assigned"] = len([
+                    a for a in current_records
+                    if float(a.get("osmosisPoints") or 0) > 0
+                ])
+            except Exception:
+                plan["currently_assigned"] = 0
+        return plan
     except Exception as e:
         logger.exception("Osmosis preview failed")
         return {"ok": False, "error": str(e)}

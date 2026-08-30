@@ -532,3 +532,29 @@ code { background: rgba(56,189,248,0.1); color: var(--accent); padding: 1px 6px;
 .hero-stats .h-stat:nth-child(5) { animation: riseIn .5s var(--ease) .23s backwards; }
 
 @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } * { animation: none !important; transition: none !important; } }
+
+/* ===== Osmosis 分配器：指标卡 + 积分柱状图 ===== */
+.osmosis-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+.metric-card { background: var(--bg-2); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; transition: border-color .2s var(--ease), transform .2s var(--ease); }
+.metric-card:hover { border-color: rgba(34,211,238,0.35); transform: translateY(-2px); }
+.metric-label { font-size: 12px; color: var(--text-dim); margin-bottom: 6px; }
+.metric-value { font-size: 22px; font-weight: 600; color: var(--text); line-height: 1.2; }
+.metric-sub { font-size: 11px; color: var(--text-mute); margin-top: 4px; }
+
+.type-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; color: #081018; }
+.type-badge.regular { background: var(--accent); }
+.type-badge.super { background: var(--accent-2); }
+
+.osmosis-chart-legend { display: flex; gap: 16px; margin-bottom: 14px; font-size: 12px; color: var(--text-dim); }
+.osmosis-legend-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
+.osmosis-legend-dot.regular { background: linear-gradient(90deg, var(--accent), #34d399); }
+.osmosis-legend-dot.super { background: linear-gradient(90deg, var(--accent-2), #f59e0b); }
+
+.osmosis-bar-row { display: flex; align-items: center; gap: 10px; margin-bottom: 9px; font-size: 12px; }
+.osmosis-bar-label { width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); color: var(--text-dim); }
+.osmosis-bar-track { flex: 1; height: 20px; background: var(--bg-3); border-radius: 10px; overflow: hidden; position: relative; }
+.osmosis-bar-fill { height: 100%; border-radius: 10px; transition: width .55s var(--ease); }
+.osmosis-bar-regular { background: linear-gradient(90deg, var(--accent), #34d399); }
+.osmosis-bar-super { background: linear-gradient(90deg, var(--accent-2), #f59e0b); }
+.osmosis-bar-score { width: 60px; text-align: right; color: var(--text); font-weight: 500; font-variant-numeric: tabular-nums; }
+.osmosis-bar-metric { width: 50px; text-align: right; font-variant-numeric: tabular-nums; }
