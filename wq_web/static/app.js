@@ -503,6 +503,7 @@ async function refreshSyncStatus() {
   try {
     const r = await api('/api/sync/pnl/status');
     const running = r.running;
+    state._syncRunning = running;
     const prog = r.progress || {};
     const phase = prog.phase || '';
     const cur = prog.current || 0, tot = prog.total || 0;
@@ -538,6 +539,7 @@ async function refreshSyncStatus() {
       $('syncResultFail').textContent = (r.last_result.failed_ids || []).length;
     }
   } catch (e) { /* 忽略 */ }
+  return !!state._syncRunning;
 }
 
 function renderSyncResult(r) {
@@ -566,14 +568,27 @@ function renderSyncResult(r) {
 $('btnStartSync').addEventListener('click', async () => {
   $('syncStatus').textContent = '启动中…';
   try {
-    // 默认只拉 PnL，不算 corr；corr 走手动单点触发，节省资源
-    const r = await api('/api/sync/pnl', { method: 'POST', body: JSON.stringify({ compute_corr: false }) });
+    // 默认增量只拉未拉过的；勾选「强制全量」则重拉所有
+    const forceFull = document.getElementById('syncForceFull')?.checked || false;
+    const r = await api('/api/sync/pnl', { method: 'POST', body: JSON.stringify({ compute_corr: false, force_full: forceFull }) });
     if (!r.ok) { toast(r.error || '启动失败', 'error'); $('syncStatus').textContent = '未运行'; return; }
-    toast('PnL 同步已启动', 'success');
+    toast('PnL 同步已启动' + (forceFull ? '（强制全量）' : '（增量）'), 'success');
     if (window._syncTimer) clearInterval(window._syncTimer);
     window._syncTimer = setInterval(refreshSyncStatus, 1500);
     refreshSyncStatus();
-  } catch (e) { toast('启动失败：' + e.message, 'error'); $('syncStatus').textContent = '未运行'; }
+  } catch (e) {
+    const msg = (e && e.message) ? e.message : '';
+    // 刷新页面后点启动：后端已在跑，恢复进度轮询即可，不报错
+    if (msg.includes('已在运行')) {
+      if (window._syncTimer) clearInterval(window._syncTimer);
+      window._syncTimer = setInterval(refreshSyncStatus, 1500);
+      refreshSyncStatus();
+      toast('同步已在后台运行，已恢复进度轮询', 'success');
+    } else {
+      toast('启动失败：' + msg, 'error');
+      $('syncStatus').textContent = '未运行';
+    }
+  }
 });
 $('btnStopSync').addEventListener('click', async () => {
   try {
@@ -983,7 +998,10 @@ loadBatches();
 loadConcurrency();
 loadMemos();
 loadPrompts();
-refreshSyncStatus();
+refreshSyncStatus().then(running => {
+  // 刷新页面后若后端同步仍在运行，自动恢复进度轮询（定时器随页面销毁）
+  if (running && !window._syncTimer) window._syncTimer = setInterval(refreshSyncStatus, 1500);
+});
 connectWS();
 
 // ====== 锚点 active 状态跟随滚动 ======

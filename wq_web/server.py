@@ -691,7 +691,8 @@ async def get_quota() -> dict:
 async def start_pnl_sync(req: Request) -> dict:
     """启动 PnL 同步 + 本地 corr 计算。
 
-    Body: {"compute_corr": true}（默认 true），{"alpha_ids": ["...", "..."]}（可选，只同步这些）
+    Body: {"compute_corr": true}（默认 true），{"alpha_ids": ["...", "..."]}（可选，只同步这些），
+          {"force_full": true}（可选，强制全量重拉，跳过增量）
     """
     body = {}
     try:
@@ -699,6 +700,7 @@ async def start_pnl_sync(req: Request) -> dict:
     except Exception:
         pass
     compute_corr = bool(body.get("compute_corr", False))
+    force_full = bool(body.get("force_full", False))
     alpha_id_filter = set(body.get("alpha_ids") or []) if body.get("alpha_ids") else None
 
     if pnl_sync_state.running:
@@ -717,6 +719,7 @@ async def start_pnl_sync(req: Request) -> dict:
             stop_event=pnl_sync_state.stop_event,
             compute_corr=compute_corr,
             alpha_id_filter=alpha_id_filter,
+            force_full=force_full,
         )
 
     return pnl_sync_state.start(_target)

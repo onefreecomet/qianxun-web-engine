@@ -180,6 +180,10 @@
               <button class="btn btn-primary" id="btnStartSync"><svg class="ico" viewBox="0 0 16 16"><path d="M5 3 12 8 5 13Z"/></svg>启动同步</button>
               <button class="btn" id="btnStopSync"><svg class="ico" viewBox="0 0 16 16"><rect x="4" y="4" width="8" height="8" rx="1.5"/></svg>停止</button>
             </div>
+            <label style="margin-top:10px;display:flex;gap:7px;align-items:center;font-size:12px;color:var(--text-dim);cursor:pointer">
+              <input type="checkbox" id="syncForceFull" style="width:14px;height:14px;accent-color:var(--accent)">
+              强制全量（跳过增量，重拉所有已提交 alpha 的 PnL）
+            </label>
 
             <!-- 手动算 Self/PPA Corr -->
             <div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--border)">

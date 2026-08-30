@@ -39,6 +39,8 @@ def sync_pnls(
     stop_event: threading.Event | None = None,
     compute_corr: bool = True,
     alpha_id_filter: set[str] | None = None,
+    incremental: bool = True,
+    force_full: bool = False,
 ) -> dict:
     """同步 PnL 全流程。
 
@@ -73,9 +75,25 @@ def sync_pnls(
         return {"total": len(alphas), "success": 0, "failed_ids": [], "corr_computed": 0,
                 "stopped": True}
 
-    # 过滤：只同步要的那些
+    # 过滤：只同步要那些
     if alpha_id_filter:
         alphas = [a for a in alphas if a["id"] in alpha_id_filter]
+    # 增量模式（默认开启）：只拉本地从未成功抓取过 PnL 的 alpha，跳过已拉取的
+    elif incremental and not force_full:
+        try:
+            rows = storage._conn.execute(
+                "SELECT alpha_id, pnl_fetched_at FROM alphas"
+            ).fetchall()
+            fetched = {row[0]: row[1] for row in rows}
+            before = len(alphas)
+            alphas = [a for a in alphas if not fetched.get(a["id"])]
+            skipped = before - len(alphas)
+            emit({"phase": "alphas", "current": before, "total": before,
+                  "success": before, "failed": 0,
+                  "message": f"增量模式：跳过 {skipped} 个已拉取的 alpha，待拉 {len(alphas)} 个"})
+        except Exception as e:
+            log.warning("增量过滤失败，回退全量：%s", e)
+
     total = len(alphas)
     if total == 0:
         emit({"phase": "completed", "current": 0, "total": 0, "success": 0,
