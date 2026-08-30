@@ -773,7 +773,8 @@ OSMOSIS_RULES = {
 
 def _patch_alpha_points(alpha_id: str, points: int | None) -> dict:
     client = _client()
-    payload = {"osmosisPoints": None if points is None else int(points)}
+    # BRAIN PATCH /alphas/{id} 设置属性用 snake_case：osmosis_points
+    payload = {"osmosis_points": None if points is None else int(points)}
     resp = client._request_with_retry(
         "PATCH",
         f"/alphas/{alpha_id}",
@@ -781,10 +782,15 @@ def _patch_alpha_points(alpha_id: str, points: int | None) -> dict:
         op_name=f"patch_osmosis_points[{alpha_id}]",
     )
     data = resp.json() if resp.text else {}
+    confirmed = None
+    if isinstance(data, dict):
+        # 平台返回可能是 snake_case 或 camelCase，都读一下
+        confirmed = data.get("osmosis_points") or data.get("osmosisPoints")
     return {
         "alpha_id": alpha_id,
         "points": points,
-        "confirmed": data.get("osmosisPoints") if isinstance(data, dict) else None,
+        "status_code": resp.status_code,
+        "confirmed": confirmed,
     }
 
 
@@ -918,15 +924,23 @@ async def osmosis_allocate(req: Request) -> dict:
                     "alpha_id": alpha_id,
                     "points": points,
                     "ok": True,
+                    "status_code": res.get("status_code"),
                     "confirmed": res.get("confirmed"),
                 })
             except Exception as e:
                 failed += 1
+                detail = {"error": str(e)[:300]}
+                # 尽量把 HTTP 状态和响应体暴露出来，方便定位
+                if hasattr(e, "response") and e.response is not None:
+                    detail["status_code"] = e.response.status_code
+                    detail["response_body"] = e.response.text[:300]
+                elif hasattr(e, "status_code"):
+                    detail["status_code"] = e.status_code
                 writes.append({
                     "alpha_id": alpha_id,
                     "points": points,
                     "ok": False,
-                    "error": str(e)[:200],
+                    **detail,
                 })
 
         return {

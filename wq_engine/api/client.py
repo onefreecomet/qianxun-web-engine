@@ -775,14 +775,18 @@ class APIClient:
         name: str | None = None,
         color: str | None = None,
         tags: list[str] | None = None,
+        osmosis_points: int | None = None,
     ) -> bool:
         """PATCH alpha 属性。"""
-        params = {
+        params: dict[str, Any] = {
             "color": color,
             "name": name,
             "tags": tags or ["ace_tag"],
             "category": None,
         }
+        if osmosis_points is not None:
+            # BRAIN 使用 snake_case 字段名设置 osmosis 分数
+            params["osmosis_points"] = int(osmosis_points)
         resp = self._request_with_retry(
             "PATCH", f"/alphas/{alpha_id}", json=params,
             op_name=f"set_alpha_properties[{alpha_id}]",
