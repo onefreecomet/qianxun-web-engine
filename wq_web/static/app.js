@@ -237,6 +237,13 @@ async function loadBatches(silent = false) {
 }
 
 function renderBatchList() {
+  // diff 保护：批次数据与选中态都没变时跳过重绘，避免 4 秒轮询无谓重建 DOM（闪烁 + 小 GC）
+  const key = (state.currentBatch || '') + '|' + state.batches.map(b =>
+    [b.batch_no, b.status, b.sim_done, b.sim_total, b.sim_completed, b.sim_failed,
+     b.success, b.failed, b.total, b.expression_count].join(':')
+  ).join('|');
+  if (key === state._lastListKey) return;
+  state._lastListKey = key;
   const container = $('batchList');
   if (state.batches.length === 0) {
     container.innerHTML = '<div class="muted">暂无批次</div>';
