@@ -255,6 +255,32 @@ async def list_batches(limit: int = 50) -> dict:
                 r["task_run_id"] = None
         except Exception:
             r["success"] = r["failed"] = r["total"] = 0
+            r["task_run_id"] = r.get("task_run_id")
+    # 实时进度：按 simulations 表逐条状态统计（task_runs.success/failed 仅批次结束才更新）
+    ids = [r.get("task_run_id") for r in rows if r.get("task_run_id")]
+    if ids:
+        qmarks = ",".join("?" * len(ids))
+        try:
+            with st._lock:
+                sim_rows = st._conn.execute(
+                    f"SELECT task_run_id, status, COUNT(*) c FROM simulations "
+                    f"WHERE task_run_id IN ({qmarks}) GROUP BY task_run_id, status",
+                    ids,
+                ).fetchall()
+            sim_counts = {}
+            for srow in sim_rows:
+                sim_counts.setdefault(srow["task_run_id"], {})[srow["status"]] = srow["c"]
+            for r in rows:
+                sc = sim_counts.get(r.get("task_run_id")) or {}
+                stotal = sum(sc.values())
+                scompleted = sc.get("completed", 0)
+                sfailed = sc.get("failed", 0) + sc.get("cancelled", 0) + sc.get("error", 0)
+                r["sim_total"] = stotal
+                r["sim_completed"] = scompleted
+                r["sim_failed"] = sfailed
+                r["sim_done"] = scompleted + sfailed
+        except Exception:
+            pass
     return {"ok": True, "batches": [_serialize(r) for r in rows]}
 
 
@@ -291,6 +317,48 @@ async def batch_detail(batch_no: str) -> dict:
         "task_run": _serialize(task_run),
         "alphas": [_serialize(a) for a in alphas],
         "simulations": [_serialize(s) for s in sim_rows],
+    }
+
+
+@app.get("/api/batches/{batch_no}/progress")
+async def batch_progress(batch_no: str) -> dict:
+    """实时进度：按 simulations 表逐条状态统计，跨进程（MCP/web）通用。
+    task_runs.success/failed 仅在批次结束才写库，故进度以 simulations 为准。"""
+    st = _storage()
+    with st._lock:
+        tr = st._conn.execute(
+            "SELECT * FROM task_runs WHERE batch_no=? ORDER BY id DESC LIMIT 1",
+            (batch_no,),
+        ).fetchone()
+    if not tr:
+        return {"ok": False, "error": "no task_run", "batch_no": batch_no}
+    t = dict(tr)
+    tid = t["id"]
+    with st._lock:
+        rows = st._conn.execute(
+            "SELECT status, COUNT(*) c FROM simulations WHERE task_run_id=? GROUP BY status",
+            (tid,),
+        ).fetchall()
+    counts = {r["status"]: r["c"] for r in rows}
+    total = sum(counts.values())
+    completed = counts.get("completed", 0)
+    failed = counts.get("failed", 0) + counts.get("cancelled", 0) + counts.get("error", 0)
+    running = counts.get("running", 0)
+    pending = counts.get("pending", 0) + counts.get("submitted", 0)
+    done = completed + failed
+    pct = round(min(100, done / total * 100), 1) if total > 0 else 0
+    return {
+        "ok": True,
+        "batch_no": batch_no,
+        "task_run_id": tid,
+        "status": t.get("status"),
+        "total": total,
+        "completed": completed,
+        "failed": failed,
+        "running": running,
+        "pending": pending,
+        "done": done,
+        "pct": pct,
     }
 
 

@@ -101,8 +101,8 @@ function handleWS(msg) {
     // 节流刷新
     clearTimeout(state._refreshTimer);
     state._refreshTimer = setTimeout(() => {
-      loadBatches();
-      if (state.currentBatch === msg.batch_no) loadBatchDetail(msg.batch_no);
+      loadBatches(true);
+      if (state.currentBatch === msg.batch_no) refreshDetailProgress();
     }, 500);
   }
 }
@@ -198,13 +198,42 @@ async function refreshSchedulerState() {
 setInterval(refreshSchedulerState, 1500);
 refreshSchedulerState();
 
+// 批次列表自动轮询：覆盖 MCP 独立进程提交的 AI 批次（web 收不到其 WS 进度事件）
+setInterval(() => {
+  const c = $('batchList');
+  const top = c ? c.scrollTop : 0;
+  loadBatches(true).then(() => { if (c) c.scrollTop = top; });
+}, 4000);
+
+// 打开的批次详情：实时进度（只更新进度条元素，不整页重渲染，避免清空提交框输入）
+async function refreshDetailProgress() {
+  const no = state.currentBatch;
+  if (!no) return;
+  try {
+    const r = await api('/api/batches/' + no + '/progress');
+    if (!r.ok) return;
+    // 批次跑完（completed/failed）且之前在跑 -> 整页刷新看回填结果
+    if ((r.status === 'completed' || r.status === 'failed') && state._detailRunning) {
+      state._detailRunning = false;
+      loadBatchDetail(no);
+      return;
+    }
+    state._detailRunning = (r.status === 'running');
+    const fill = $('detailProgressFill');
+    const txt = $('detailProgressText');
+    if (fill) fill.style.width = r.pct + '%';
+    if (txt) txt.textContent = `完成 ${r.completed} / 失败 ${r.failed} / 总 ${r.total} (${r.pct}%)`;
+  } catch (e) { /* 静默 */ }
+}
+setInterval(refreshDetailProgress, 2500);
+
 // ====== Batches ======
-async function loadBatches() {
+async function loadBatches(silent = false) {
   try {
     const r = await api('/api/batches?limit=100');
     state.batches = r.batches;
     renderBatchList();
-  } catch (e) { toast('加载批次失败：' + e.message, 'error'); }
+  } catch (e) { if (!silent) toast('加载批次失败：' + e.message, 'error'); }
 }
 
 function renderBatchList() {
@@ -214,8 +243,8 @@ function renderBatchList() {
     return;
   }
   container.innerHTML = state.batches.map(b => {
-    const total = b.total || b.expression_count || 0;
-    const done = (b.success || 0) + (b.failed || 0);
+    const total = b.sim_total || b.total || b.expression_count || 0;
+    const done = (b.sim_done != null ? b.sim_done : (b.success || 0) + (b.failed || 0));
     const pct = total > 0 ? Math.min(100, done / total * 100) : 0;
     const cls = b.status === 'completed' ? 'completed' : b.status === 'failed' ? 'failed' : '';
     const selected = state.currentBatch === b.batch_no ? 'selected' : '';
@@ -255,9 +284,16 @@ async function loadBatchDetail(batchNo) {
     const statusClass = batch.status === 'completed' ? 'check-pass' :
                         batch.status === 'failed' ? 'check-fail' : 'check-warn';
 
-    const sim = task_run || {};
-    const success = sim.success || 0, failed = sim.failed || 0, total = sim.total || 0;
-    const pct = total > 0 ? Math.min(100, (success + failed) / total * 100) : 0;
+    // 实时进度以 simulations 表逐条状态为准（task_run.success/failed 仅批次结束才写）
+    const sims = simulations || [];
+    const simTotal = sims.length || (task_run ? (task_run.total || 0) : 0);
+    const simCompleted = sims.filter(s => s.status === 'completed').length;
+    const simFailed = sims.filter(s => ['failed', 'cancelled', 'error'].includes(s.status)).length;
+    const simDone = simCompleted + simFailed;
+    const total = simTotal;
+    const success = simCompleted, failed = simFailed;
+    const pct = total > 0 ? Math.min(100, simDone / total * 100) : 0;
+    state._detailRunning = (batch.status === 'running');
 
     let html = `
       <div class="detail-section">
@@ -276,11 +312,12 @@ async function loadBatchDetail(batchNo) {
     `;
 
     if (total > 0) {
+      const barCls = batch.status === 'completed' ? 'completed' : batch.status === 'failed' ? 'failed' : '';
       html += `
         <div class="detail-section">
           <h3>进度</h3>
-          <div class="progress-bar" style="height:8px"><div class="progress-bar-fill ${batch.status === 'completed' ? 'completed' : ''}" style="width:${pct.toFixed(1)}%"></div></div>
-          <div style="margin-top:8px; color:var(--text-dim); font-size:13px">
+          <div class="progress-bar" style="height:8px"><div class="progress-bar-fill ${barCls}" id="detailProgressFill" style="width:${pct.toFixed(1)}%"></div></div>
+          <div id="detailProgressText" style="margin-top:8px; color:var(--text-dim); font-size:13px">
             完成 <span style="color:var(--green)">${success}</span> / 失败 <span style="color:var(--red)">${failed}</span> / 总 ${total} (${pct.toFixed(1)}%)
           </div>
         </div>
