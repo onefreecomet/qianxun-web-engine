@@ -30,6 +30,7 @@ from fastapi.responses import HTMLResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 from fastapi.templating import Jinja2Templates  # noqa: E402
 
+from wq_engine.api.client import AuthError  # noqa: E402
 from wq_engine.mcp_server import _client, _latest_db, _normalize_settings  # noqa: E402
 from wq_engine.osmosis import OsmosisConfig, build_allocation_plan  # noqa: E402
 from wq_engine.scheduler.runner import BatchScheduler  # noqa: E402
@@ -771,10 +772,25 @@ OSMOSIS_RULES = {
 }
 
 
+# 写平台降速间隔（秒）。BRAIN 对高频写有限流，串行写必须留呼吸，
+# 否则先 429 后升级为 captcha required（实测踩过）。
+_WRITE_INTERVAL = 0.4
+
+
 def _patch_alpha_points(alpha_id: str, points: int | None) -> dict:
+    """设置/清空某个 alpha 的 osmosis 分数。
+
+    payload 用完整属性包（与 set_alpha_properties 一致）：只发单个裸字段
+    osmosis_points 曾被平台以 400 Bad Request 拒绝。
+    """
     client = _client()
-    # BRAIN PATCH /alphas/{id} 设置属性用 snake_case：osmosis_points
-    payload = {"osmosis_points": None if points is None else int(points)}
+    payload = {
+        "color": None,
+        "name": None,
+        "tags": ["ace_tag"],
+        "category": None,
+        "osmosis_points": None if points is None else int(points),
+    }
     resp = client._request_with_retry(
         "PATCH",
         f"/alphas/{alpha_id}",
@@ -804,17 +820,31 @@ def _clear_existing_points(region: str, delay: int, max_scan: int = 1000) -> dic
     ok = 0
     failed = 0
     details = []
-    for a in scored:
+    aborted = None
+    for idx, a in enumerate(scored):
         alpha_id = str(a.get("id"))
+        if idx > 0:
+            time.sleep(_WRITE_INTERVAL)
         try:
             _patch_alpha_points(alpha_id, None)
             ok += 1
             details.append({"alpha_id": alpha_id, "ok": True})
+        except AuthError as e:
+            # 认证类错误（429 限流 / captcha 要求）无法自愈，继续打只会加重封禁
+            failed += 1
+            details.append({
+                "alpha_id": alpha_id,
+                "ok": False,
+                "error": str(e)[:300],
+                "auth_error": True,
+            })
+            aborted = f"遇到认证错误，已中止清空：{e}"
+            break
         except Exception as e:
             failed += 1
             details.append({"alpha_id": alpha_id, "ok": False, "error": str(e)[:200]})
 
-    return {"cleared": ok, "failed": failed, "details": details}
+    return {"cleared": ok, "failed": failed, "details": details, "aborted": aborted}
 
 
 @app.get("/api/osmosis/config")
@@ -912,11 +942,14 @@ async def osmosis_allocate(req: Request) -> dict:
         ok = 0
         failed = 0
         writes = []
-        for row in selected:
+        aborted = None
+        for idx, row in enumerate(selected):
             alpha_id = row.get("alpha_id")
             points = row.get("osmosis_new")
             if not alpha_id or points is None:
                 continue
+            if idx > 0:
+                time.sleep(_WRITE_INTERVAL)
             try:
                 res = _patch_alpha_points(alpha_id, points)
                 ok += 1
@@ -927,6 +960,19 @@ async def osmosis_allocate(req: Request) -> dict:
                     "status_code": res.get("status_code"),
                     "confirmed": res.get("confirmed"),
                 })
+            except AuthError as e:
+                # 认证类错误（429 限流 / captcha 要求）无法自愈，
+                # 继续打只会让平台把账号压得更死，必须立即中止整批
+                failed += 1
+                writes.append({
+                    "alpha_id": alpha_id,
+                    "points": points,
+                    "ok": False,
+                    "error": str(e)[:300],
+                    "auth_error": True,
+                })
+                aborted = f"遇到认证错误，已中止剩余写入：{e}"
+                break
             except Exception as e:
                 failed += 1
                 detail = {"error": str(e)[:300]}
@@ -952,6 +998,7 @@ async def osmosis_allocate(req: Request) -> dict:
             "written": ok,
             "failed": failed,
             "writes": writes,
+            "aborted": aborted,
         }
     except Exception as e:
         logger.exception("Osmosis allocate failed")

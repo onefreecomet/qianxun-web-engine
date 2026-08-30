@@ -1084,9 +1084,20 @@ async function allocateOsmosis() {
         </div>
       `;
     }
+    const abortMsg = r.aborted || cleared.aborted;
+    let abortHtml = '';
+    if (abortMsg) {
+      abortHtml = `
+        <div style="margin-top:12px;padding:10px 12px;border-radius:8px;background:var(--neg-soft);color:var(--bad);font-size:13px;line-height:1.5">
+          ⚠️ ${abortMsg}
+          <div style="margin-top:6px;color:var(--text-dim);font-size:12px">多半是短时间内登录/请求过于频繁，被平台限流并升级成验证码保护。请到浏览器打开 BRAIN 正常登录一次（有验证码先完成），等几分钟再重试。</div>
+        </div>
+      `;
+    }
     $('osmosisStatusBody').innerHTML = `
       <span class="live-tag on" style="margin-right:8px">DONE</span>
       已写入 ${r.scope}：清空旧分 ${cleared.cleared || 0} 个，写入新分 ${r.written || 0} 个，失败 ${r.failed || 0} 个。
+      ${abortHtml}
       ${failHtml}
     `;
   } catch (e) {

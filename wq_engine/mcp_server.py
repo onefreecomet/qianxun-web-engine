@@ -21,6 +21,7 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -116,13 +117,41 @@ def _storage() -> Storage:
     return Storage(p)
 
 
+# 共享 client（复用登录态）
+# ⚠️ 关键：绝不能每次调用都 new APIClient + authenticate()。
+# BRAIN 的 /authentication 有严格限流：批量操作（如 Osmosis 写 25 个 alpha）
+# 会打成 25 次登录 → 先 429 rate limit → 再升级为 400 captcha required，
+# 最终整批失败。此处做模块级单例，APIClient 内部在收到 401 时会自动重新登录。
+_client_singleton: APIClient | None = None
+_client_lock = threading.Lock()
+
+
 def _client() -> APIClient:
-    cfg = BrainConfig.from_env()
-    if not cfg.is_authenticated():
-        raise RuntimeError("未配置凭据：请设置环境变量 WQ_USERNAME / WQ_PASSWORD（或系统 keyring alpha-machine）")
-    c = APIClient(cfg)
-    c.authenticate()
-    return c
+    """返回共享的 APIClient 实例（复用登录态）。"""
+    global _client_singleton
+    with _client_lock:
+        if _client_singleton is not None:
+            return _client_singleton
+        cfg = BrainConfig.from_env()
+        if not cfg.is_authenticated():
+            raise RuntimeError("未配置凭据：请设置环境变量 WQ_USERNAME / WQ_PASSWORD（或系统 keyring alpha-machine）")
+        c = APIClient(cfg)
+        c.authenticate()
+        _client_singleton = c
+        return _client_singleton
+
+
+def _reset_client() -> None:
+    """丢弃共享 client（凭据变更、或认证彻底失效需要重建时调用）。"""
+    global _client_singleton
+    with _client_lock:
+        if _client_singleton is None:
+            return
+        try:
+            _client_singleton.close()
+        except Exception:
+            pass
+        _client_singleton = None
 
 
 DEFAULT_SETTINGS = {
