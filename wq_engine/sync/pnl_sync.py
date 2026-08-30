@@ -81,8 +81,10 @@ def sync_pnls(
     # 增量模式（默认开启）：只拉本地从未成功抓取过 PnL 的 alpha，跳过已拉取的
     elif incremental and not force_full:
         try:
+            # 只取本地已成功拉过 PnL 的 alpha（pnl_fetched_at 非空）；未提交的
+            # alpha 不会出现在 BRAIN 已提交列表里，也不该被缓存或参与跳过判定
             rows = storage._conn.execute(
-                "SELECT alpha_id, pnl_fetched_at FROM alphas"
+                "SELECT alpha_id, pnl_fetched_at FROM alphas WHERE pnl_fetched_at IS NOT NULL"
             ).fetchall()
             fetched = {row[0]: row[1] for row in rows}
             before = len(alphas)
