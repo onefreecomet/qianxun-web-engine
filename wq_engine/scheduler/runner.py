@@ -67,6 +67,11 @@ class _BatchRunnable:
         self.scheduler = scheduler
         self.batch_idx = batch_idx
         self.sim_records = sim_records
+        # 单条批次标记：提交/轮询/取结果三步都必须走"单模拟"路径，不能混用 multi-sim。
+        # 2026-08-29 只改了提交侧（create_simulation 修 400），轮询侧仍按 multi-sim
+        # 找 children，而单模拟响应体没有 children → 一律判"平台未返回该模拟的结果"。
+        # 实测全库 41 个单条批次 41 个全败（成功率 0.0%），2026-09-02 补齐后两步。
+        self._single = len(sim_records) == 1
 
     def _wait_if_paused(self) -> None:
         while self.scheduler._pause_event.is_set() and not self.scheduler._stop_event.is_set():
@@ -113,7 +118,7 @@ class _BatchRunnable:
                 # 平台要求：单条 sim 必须不带数组包装直接 POST（2026-08-29 实测：
                 # multi-sim 数组只有 1 条时返回 400 "Single simulations are required
                 # to be submitted without the wrapping array"）
-                if len(sim_data_list) == 1:
+                if self._single:
                     progress_url = client.create_simulation(sim_data_list[0])
                 else:
                     progress_url = client.create_multi_simulations(sim_data_list)
@@ -153,6 +158,7 @@ class _BatchRunnable:
             # 这里对齐：时间预算（默认 30 分钟），Retry-After 至少等 15s。
             children: list | None = None
             final_status = ""
+            data: dict = {}          # 兜底：轮询一次都没跑时下面引用 data 不会 NameError
             poll_deadline = time.time() + scheduler.max_poll_seconds
             attempt = 0
             while time.time() < poll_deadline and attempt < scheduler.max_poll_attempts:
@@ -160,7 +166,11 @@ class _BatchRunnable:
                 if scheduler._stop_event.is_set():
                     break
                 try:
-                    data = client.get_multi_sim_progress(progress_url)
+                    # 单条走单模拟进度接口（响应体直接含 alpha，无 children）
+                    if self._single:
+                        data = client.get_simulation_progress(progress_url)
+                    else:
+                        data = client.get_multi_sim_progress(progress_url)
                 except RateLimitError as e:
                     # v28：记录平台限流重置时刻（UI 回测槽倒计时用）
                     try:
@@ -207,6 +217,35 @@ class _BatchRunnable:
                 # RUNNING/QUEUED 中间态：真实模拟 5-10 分钟，慢慢等（可中断）
                 if scheduler._stop_event.wait(scheduler.multi_sim_poll_interval):
                     break
+
+            # --- 单条批次：直接从响应体取 alpha，不去 multi-sim 里找 children ---
+            # （2026-09-02 修复）走到这里说明已 COMPLETE/ERROR 或超时。
+            if self._single:
+                rec0 = self.sim_records[0]
+                if children is None:
+                    if scheduler._stop_event.is_set():
+                        scheduler.storage.mark_simulation_cancelled(rec0["sim_id"], "任务取消")
+                        scheduler._emit("sim_failed", {"sim_id": rec0["sim_id"], "error": "任务取消", "batch_idx": self.batch_idx})
+                        return result  # 取消不计入失败统计
+                    reason = f"轮询超时（{scheduler.max_poll_seconds:.0f}s 预算）"
+                    scheduler.storage.mark_simulation_failed(rec0["sim_id"], reason)
+                    scheduler._emit("sim_failed", {"sim_id": rec0["sim_id"], "error": reason, "batch_idx": self.batch_idx})
+                    result.failed += 1
+                    return result
+                alpha_id = (data or {}).get("alpha")
+                if alpha_id:
+                    scheduler.storage.mark_simulation_completed(rec0["sim_id"], alpha_id, progress=100)
+                    scheduler._emit("sim_completed", {
+                        "sim_id": rec0["sim_id"], "alpha_id": alpha_id, "progress": 100,
+                        "batch_idx": self.batch_idx, "expression": rec0.get("expression", ""),
+                    })
+                    result.success += 1
+                else:
+                    msg = (data or {}).get("message") or (data or {}).get("status") or "模拟失败"
+                    scheduler.storage.mark_simulation_failed(rec0["sim_id"], str(msg))
+                    scheduler._emit("sim_failed", {"sim_id": rec0["sim_id"], "error": str(msg), "batch_idx": self.batch_idx})
+                    result.failed += 1
+                return result
 
             # --- 逐个子模拟查结果（children 顺序与提交顺序对应） ---
             if children is None:

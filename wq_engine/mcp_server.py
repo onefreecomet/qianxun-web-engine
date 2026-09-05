@@ -20,10 +20,11 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import sys
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 # 让脚本既能 python -m wq_engine.mcp_server 也能 python wq_engine/mcp_server.py 跑
@@ -109,12 +110,25 @@ def _latest_db() -> Path:
     return ROOT / "data" / "alpha_machine.db"
 
 
+# 连接复用：与 web 侧一致。Storage 单连接线程安全（_ThreadSafeConn），
+# 多个 MCP 调用共享一个实例，避免每次调用都 new 连接 + executescript(SCHEMA) 去抢 SQLite 写锁。
+_storage_cache: dict[str, Storage] = {}
+_storage_cache_lock = threading.Lock()
+
+
 def _storage() -> Storage:
     p = _latest_db()
-    if not p.exists():
-        # 空库初始化（首次启动）
-        p.parent.mkdir(parents=True, exist_ok=True)
-    return Storage(p)
+    key = str(p)
+    with _storage_cache_lock:
+        cached = _storage_cache.get(key)
+        if cached is not None:
+            return cached
+        if not p.exists():
+            # 空库初始化（首次启动）
+            p.parent.mkdir(parents=True, exist_ok=True)
+        s = Storage(p)
+        _storage_cache[key] = s
+        return s
 
 
 # 共享 client（复用登录态）

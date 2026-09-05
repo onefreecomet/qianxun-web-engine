@@ -232,6 +232,16 @@ class Storage:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = _ThreadSafeConn(sqlite3.connect(str(self.db_path), check_same_thread=False))
         self._conn.row_factory = sqlite3.Row
+        # 多进程并发（web 服务 + mcp_server 各持有独立连接）共享同一 SQLite 库，
+        # 必须启用 WAL 模式 + busy_timeout，否则写冲突直接报 "database is locked"。
+        # WAL 是持久化到 db 文件的属性：任一连接设过一次，后续所有连接自动继承，
+        # 因此即使其他进程（如常驻 mcp_server）未重启也会受益。
+        try:
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute("PRAGMA busy_timeout=30000")
+            self._conn.execute("PRAGMA synchronous=NORMAL")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("设置 SQLite PRAGMA 失败（可忽略，旧库可能只读）：{}", e)
         self._lock = threading.Lock()
         self._conn.executescript(self.SCHEMA)
         self._migrate()

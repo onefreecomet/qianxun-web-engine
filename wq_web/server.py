@@ -45,12 +45,25 @@ app.mount("/static", StaticFiles(directory=WEB_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=str(WEB_DIR / "templates"))
 
 
+# 连接复用：Storage 单连接线程安全（_ThreadSafeConn），多个请求共享一个实例，
+# 避免每次请求都 new 连接 + executescript(SCHEMA) 去抢 SQLite 写锁（WAL 下仍会排队）。
+_storage_cache: dict[str, Storage] = {}
+_storage_cache_lock = threading.Lock()
+
+
 def _storage() -> Storage:
-    """统一入口：web 后端始终连 _latest_db() 自动选最新 dist_vNN。"""
+    """统一入口：web 后端始终连 _latest_db() 自动选最新 dist_vNN。连接按 db 路径缓存复用。"""
     p = _latest_db()
-    if not p.exists():
-        p.parent.mkdir(parents=True, exist_ok=True)
-    return Storage(p)
+    key = str(p)
+    with _storage_cache_lock:
+        cached = _storage_cache.get(key)
+        if cached is not None:
+            return cached
+        if not p.exists():
+            p.parent.mkdir(parents=True, exist_ok=True)
+        s = Storage(p)
+        _storage_cache[key] = s
+        return s
 
 
 def _serialize(row: dict | None) -> dict | None:
@@ -321,13 +334,17 @@ async def batch_detail(batch_no: str) -> dict:
     if task_run:
         with st._lock:
             sims = st._conn.execute(
-                "SELECT id, expression, decay, status, progress, alpha_id, retry_count, last_error "
+                "SELECT id, expression, decay, status, progress, alpha_id, retry_count, last_error, settings_json "
                 "FROM simulations WHERE task_run_id=? ORDER BY id",
                 (task_run["id"],),
             ).fetchall()
         sim_rows = [dict(s) for s in sims]
     else:
         sim_rows = []
+    # 回填结果页展开用：alpha_id → 该 sim 的完整 settings JSON
+    sim_settings = {s.get("alpha_id"): s.get("settings_json") for s in sim_rows if s.get("alpha_id")}
+    for a in alphas:
+        a["settings_json"] = sim_settings.get(a.get("alpha_id"))
     return {
         "ok": True,
         "batch": _serialize(b),
@@ -907,7 +924,7 @@ async def osmosis_tracks() -> dict:
     except Exception as e:
         return {"ok": False, "error": f"BRAIN 客户端初始化失败：{e}"}
     try:
-        records = client.list_all_submitted_alphas(max_scan=3000)
+        records = client.list_all_submitted_alphas_unscoped(max_scan=3000)
     except Exception as e:
         return {"ok": False, "error": f"拉取 alpha 列表失败：{e}"}
 

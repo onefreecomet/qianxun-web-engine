@@ -17,5 +17,11 @@ mcp>=1.2
 # ---- 凭据回退（系统 keyring）----
 keyring>=24
 
+# ---- Osmosis 分配（wq_engine/osmosis 用）----
+pandas>=2.0
+
+# ---- 灵感页 LLM Provider（wq_engine/inspiration 用）----
+requests>=2.31
+
 # ---- 可选：原生桌面窗口模式（run_native.py 用，不装则只用浏览器）----
 # pywebview>=5.0

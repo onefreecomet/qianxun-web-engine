@@ -354,7 +354,9 @@ async function loadBatchDetail(batchNo) {
               const mc = a.max_corr, mcSrc = a.max_corr_source || '';
               let mcClass = 'check-pass';
               if (mc != null) { if (mc >= 0.7) mcClass = 'check-fail'; else if (mc >= 0.5) mcClass = 'check-warn'; }
-              return `<tr>
+              const colCount = 8 + (hasCorr ? 1 : 0);
+              const payload = JSON.stringify({ expression: a.expression || '', settings_json: a.settings_json || null });
+              return `<tr class="alpha-row" data-cols="${colCount}" data-payload="${payload.replace(/"/g, '&quot;')}" title="点击展开完整表达式">
                 <td>${alphaLink(a.alpha_id)}</td>
                 <td>${fmtSharpe(a.sharpe)}</td>
                 <td>${fmtNum(a.fitness)}</td>
@@ -371,27 +373,6 @@ async function loadBatchDetail(batchNo) {
       `;
     } else {
       html += '<div class="detail-section"><h3>回填结果</h3><div class="muted">暂无 alpha 结果（批次可能还在跑，或回填未完成）</div></div>';
-    }
-
-    if (simulations.length > 0) {
-      html += `
-        <div class="detail-section">
-          <h3>表达式状态（${simulations.length} 条）</h3>
-          <table class="data-table">
-            <thead><tr><th>#</th><th>状态</th><th>Alpha ID</th><th>Decay</th><th>重试</th><th>错误</th></tr></thead>
-            <tbody>${simulations.map(s => `
-              <tr>
-                <td>${s.id}</td>
-                <td><span class="status-badge status-${s.status}">${s.status}</span></td>
-                <td>${s.alpha_id ? alphaLink(s.alpha_id) : '—'}</td>
-                <td>${s.decay || '—'}</td>
-                <td>${s.retry_count || 0}</td>
-                <td class="muted" style="font-size:12px">${(s.last_error || '').slice(0, 60)}</td>
-              </tr>
-            `).join('')}</tbody>
-          </table>
-        </div>
-      `;
     }
 
     $('batchDetail').innerHTML = html;
@@ -498,6 +479,45 @@ document.addEventListener('click', async (e) => {
     setTimeout(() => { btn.textContent = '⧉'; }, 1200);
   }
 });
+
+// 回填结果行：点击展开/收起完整表达式 + settings（事件委托，全局一次）
+document.addEventListener('click', (e) => {
+  // 点链接跳官网、点复制按钮时不触发展开
+  if (e.target.closest('.copy-btn') || e.target.closest('a.alpha-id')) return;
+  const row = e.target.closest('tr.alpha-row');
+  if (!row) return;
+  const next = row.nextElementSibling;
+  if (next && next.classList.contains('expr-detail-row')) {
+    next.remove();
+    row.classList.remove('expanded');
+    return;
+  }
+  let data = {};
+  try { data = JSON.parse(row.dataset.payload || '{}'); } catch (_) { data = {}; }
+  const expr = data.expression || '（无表达式）';
+  let settingsText = '（无 settings 记录）';
+  if (data.settings_json) {
+    try { settingsText = JSON.stringify(JSON.parse(data.settings_json), null, 2); }
+    catch (_) { settingsText = String(data.settings_json); }
+  }
+  const cols = row.dataset.cols || '9';
+  const detail = document.createElement('tr');
+  detail.className = 'expr-detail-row';
+  detail.innerHTML = `<td colspan="${cols}">
+    <div class="expr-detail-box">
+      <div class="expr-detail-label">表达式</div>
+      <pre class="expr-detail-code">${escapeHtml(expr)}</pre>
+      <div class="expr-detail-label">Settings</div>
+      <pre class="expr-detail-code">${escapeHtml(settingsText)}</pre>
+    </div>
+  </td>`;
+  row.after(detail);
+  row.classList.add('expanded');
+});
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
 
 async function refreshSyncStatus() {
   try {

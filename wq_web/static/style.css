@@ -295,6 +295,25 @@ table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .data-table tr:last-child td { border-bottom: none; }
 .alpha-id { font-family: var(--mono); color: var(--accent); cursor: pointer; font-size: 13px; }
 .alpha-id:hover { text-decoration: underline; }
+
+/* 回填结果行：点击展开完整表达式 + settings */
+tr.alpha-row { cursor: pointer; }
+tr.alpha-row td:first-child::before {
+  content: '▸'; display: inline-block; width: 12px; margin-left: -12px;
+  color: var(--text-mute); font-size: 11px; transition: transform .12s ease;
+}
+tr.alpha-row.expanded td:first-child::before { content: '▾'; color: var(--accent); }
+tr.expr-detail-row:hover td { background: var(--bg-1) !important; }
+tr.expr-detail-row td { padding: 0 14px 14px !important; background: var(--bg-1); border-bottom: 1px solid var(--border); }
+.expr-detail-box { background: var(--bg-3); border: 1px solid var(--border-2); border-radius: 6px; padding: 10px 12px; }
+.expr-detail-label { font: 600 10px var(--mono); color: var(--text-mute); text-transform: uppercase; letter-spacing: 1px; margin: 6px 0 4px; }
+.expr-detail-label:first-child { margin-top: 0; }
+.expr-detail-code {
+  margin: 0; padding: 8px 10px; background: var(--bg-1); border: 1px solid var(--border);
+  border-radius: 4px; font: 400 12px/1.6 var(--mono); color: var(--accent-3);
+  white-space: pre-wrap; word-break: break-all; max-height: 280px; overflow-y: auto;
+  user-select: text; cursor: auto;
+}
 .copy-btn {
   background: transparent; border: 1px solid var(--border);
   color: var(--text-dim); padding: 1px 6px; margin-left: 6px;

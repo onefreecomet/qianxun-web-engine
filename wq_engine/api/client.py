@@ -650,7 +650,7 @@ class APIClient:
                 break
         return all_results
 
-    def list_all_submitted_alphas(
+    def list_all_submitted_alphas_unscoped(
         self,
         *,
         max_scan: int = 3000,
