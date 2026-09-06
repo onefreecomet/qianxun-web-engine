@@ -19,40 +19,6 @@
 | Alpha 备忘录 | 按 region 分组的候选 alpha 跟踪，金字塔主题、提交状态、手写备注、直接提交 |
 | 提示词库 | 可自定义名字的提示词列表，一键复制 |
 | MCP Server | 7 个工具，覆盖登录 / 提交 / 等待 / 分析全流程 |
-| 表达式工厂 | 一阶（横截面 × 时序 × 窗口）、二阶（group 算子）、三阶（trade_when 事件）、GEM 多字段配对 |
-| 灵感生成 | LLM 给算子打分后组装表达式，DeepSeek / Minimax / Kimi 三家 provider |
-| 去重与剪枝 | 已回测指纹过滤，按字段保留 top N（正负 Sharpe 分开统计） |
-| 评分与报告 | 多维打分加否决项，导出 Markdown 与 CSV |
-
----
-
-## 引擎模块（`wq_engine`，纯函数，可脱离 Web / GUI 单独调用）
-
-除 Web 与 MCP 之外，`wq_engine` 里的这些模块不依赖任何界面，可以直接 `import` 用：
-
-| 模块 | 作用 |
-|---|---|
-| `factories/first_order.py` | 一阶工厂：字段 × 横截面算子 × 时序算子 × 窗口，笛卡尔积生成 |
-| `factories/second_order.py` | 二阶工厂：在一阶表达式外套 group 算子 × densify(group) |
-| `factories/third_order.py` | 三阶工厂：`trade_when(open_event, expr, exit_event)`，区域事件按 region 生效 |
-| `factories/gem.py` | GEM 工厂：按词根语义配对字段（call-put / act-est 等），六种构造方式 |
-| `factories/field_prep.py` | 字段预处理：MATRIX / VECTOR 包装 `winsorize` + `ts_backfill` |
-| `factories/prune.py` | 按字段前缀剪枝，每字段保留 top N（正负 Sharpe 分开统计） |
-| `inspiration/` | 灵感页：LLM 给算子打分，Top K 组装成合法 BRAIN 表达式 |
-| `dedup.py` | 剔除本地已回测过的表达式指纹，避免重复烧配额 |
-| `scoring.py` | 推荐评分：加权 Sharpe / Fitness / 低换手 / Margin，带否决项 |
-| `report.py` | 导出 Markdown 报告与 CSV |
-| `settings_registry.py` | Region → Universe / Neutralization 联动选项（BRAIN 平台实测抓取） |
-| `cli.py` | 命令行入口：`ui` / `run --config xxx.yaml` / `ai-batch --input xxx.json` |
-
-命令行跑一阶流水线（不需要界面）：
-
-```bash
-python -m wq_engine.cli run --config inputs/first_order_usa.yaml
-python -m wq_engine.cli ai-batch --input outputs/gem_xxx.json --producer 阿法
-```
-
-> 桌面 GUI（`PySide6` 界面）不在本仓库，Web 路径只用上面这些纯逻辑模块。
 
 ---
 
