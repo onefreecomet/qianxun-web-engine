@@ -1,0 +1,878 @@
+/* =====================================================================
+   Alpha Simulator · 视觉改版
+   设计语言与指挥中心一致：墨色底 + 信号青主色 + 琥珀副色，
+   面板用「玻璃卡 + 顶部信号高光 + 柔和投影」，配细腻的入场动效。
+   ===================================================================== */
+
+/* ---------- 页面底色：在通用底纹上再叠一层信号辉光 ---------- */
+.sim-body { position: relative; }
+.sim-body::after {
+  content: '';
+  position: fixed; inset: 0; pointer-events: none; z-index: 0;
+  background:
+    radial-gradient(900px 420px at 78% -6%, rgba(34,211,238,0.09), transparent 62%),
+    radial-gradient(720px 360px at 4% 6%, rgba(245,181,68,0.05), transparent 58%);
+}
+
+/* =====================================================================
+   1. 顶栏
+   ===================================================================== */
+.sim-topbar {
+  height: 64px;
+  padding: 0 22px;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  background: linear-gradient(180deg, rgba(14,18,25,0.94), rgba(10,13,18,0.9));
+  backdrop-filter: blur(16px) saturate(140%);
+  border-bottom: 1px solid var(--border);
+  box-shadow: 0 10px 30px rgba(0,0,0,0.32);
+}
+.sim-topbar::after {
+  content: '';
+  position: absolute; left: 0; right: 0; bottom: -1px; height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(34,211,238,0.5) 22%, rgba(34,211,238,0.12) 60%, transparent);
+  opacity: 0.7;
+}
+
+.sim-brand { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
+.sim-brand .brand-mark { width: 34px; height: 34px; font-size: 18px; }
+
+/* ---------- 顶部指标轨道 ---------- */
+.sim-global-metrics {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  overflow-x: auto;
+  padding: 4px 2px;
+  scrollbar-width: none;
+}
+.sim-global-metrics::-webkit-scrollbar { display: none; }
+
+.gmetric {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 96px;
+  padding: 6px 14px 7px 14px;
+  background: linear-gradient(180deg, var(--bg-2), rgba(14,18,25,0.9));
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  transition: border-color .18s var(--ease), transform .18s var(--ease), box-shadow .18s var(--ease);
+}
+.gmetric::before {
+  content: '';
+  position: absolute; left: 0; top: 9px; bottom: 9px; width: 2px;
+  border-radius: 2px; background: var(--accent); opacity: 0.5;
+}
+.gmetric-live::before {
+  background: linear-gradient(180deg, var(--accent), #7ad9ec);
+  box-shadow: 0 0 8px rgba(34,211,238,0.55);
+  opacity: 0.95;
+}
+.gmetric-sec::before { background: var(--text-mute); opacity: 0.55; }
+.gmetric:hover {
+  border-color: rgba(34,211,238,0.4);
+  transform: translateY(-1px);
+  box-shadow: 0 8px 20px rgba(0,0,0,0.35);
+}
+
+.gmetric-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font: 600 9.5px var(--mono);
+  color: var(--text-mute);
+  text-transform: uppercase;
+  letter-spacing: 0.9px;
+  white-space: nowrap;
+}
+.gmetric-value {
+  font: 700 17px var(--display);
+  color: var(--text);
+  letter-spacing: -0.3px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  line-height: 1.15;
+}
+.gmetric-sec .gmetric-value { color: var(--text-dim); font-weight: 600; font-size: 16px; }
+
+.gmetric-sep {
+  width: 1px;
+  align-self: stretch;
+  margin: 4px 4px;
+  background: linear-gradient(180deg, transparent, var(--border-2), transparent);
+  flex: none;
+}
+
+/* 来源标记：B = BRAIN 实时 */
+.gsrc {
+  font: 700 8.5px var(--mono);
+  font-style: normal;
+  line-height: 1;
+  color: var(--text-mute);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 3px;
+  cursor: help;
+}
+.gsrc-live {
+  color: var(--accent);
+  border-color: rgba(34,211,238,0.4);
+  background: var(--signal-soft);
+}
+
+/* ---------- 顶栏右侧 ---------- */
+.sim-topbar-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.sim-live-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  background: var(--pos-soft);
+  border: 1px solid rgba(74,222,128,0.32);
+  color: var(--good);
+  font: 600 11px var(--mono);
+  letter-spacing: 0.4px;
+  white-space: nowrap;
+}
+.sim-live-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--good);
+  box-shadow: 0 0 8px var(--good);
+  animation: pulse 1.8s infinite;
+}
+
+/* =====================================================================
+   2. 主布局
+   ===================================================================== */
+.sim-main {
+  position: relative;
+  z-index: 1;
+  max-width: 1640px;
+  margin: 0 auto;
+  padding: 18px 22px 88px;
+}
+
+/* ---------- 标签栏 ---------- */
+.sim-tabs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+  position: relative;
+}
+.sim-tabs::after {
+  content: '';
+  position: absolute; left: 0; bottom: -1px; width: 180px; height: 1px;
+  background: linear-gradient(90deg, var(--accent), transparent);
+  opacity: 0.55;
+}
+
+.sim-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 15px;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  cursor: pointer;
+  font: 500 13px var(--sans);
+  color: var(--text-dim);
+  transition: all .16s var(--ease);
+}
+.sim-tab:hover { color: var(--text); border-color: var(--border-2); transform: translateY(-1px); }
+.sim-tab.active {
+  color: var(--text);
+  background: linear-gradient(180deg, rgba(34,211,238,0.10), rgba(34,211,238,0.02));
+  border-color: rgba(34,211,238,0.45);
+  box-shadow: 0 0 0 1px rgba(34,211,238,0.12), 0 8px 18px rgba(0,0,0,0.28);
+}
+.sim-tab-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--good);
+  box-shadow: 0 0 8px var(--good);
+}
+.sim-tab.active .sim-tab-dot { animation: pulse 1.8s infinite; }
+.sim-tab-close {
+  background: transparent; border: none; color: var(--text-mute);
+  cursor: pointer; font-size: 15px; line-height: 1;
+  padding: 0 2px; border-radius: 4px; transition: all .12s;
+}
+.sim-tab-close:hover { color: var(--bad); background: var(--neg-soft); }
+.sim-tab-add {
+  width: 32px; height: 32px; border-radius: 9px;
+  background: var(--bg-1); border: 1px dashed var(--border);
+  color: var(--text-dim); cursor: pointer; font-size: 18px; line-height: 1;
+  transition: all .16s var(--ease);
+}
+.sim-tab-add:hover { color: var(--accent); border-color: var(--accent); border-style: solid; transform: translateY(-1px); }
+
+/* ---------- 双栏工作区 ---------- */
+.sim-workspace {
+  display: grid;
+  /* 左窄右宽；用 minmax(0,…) 让两栏可自由收缩，避免过早被迫堆成一列 */
+  grid-template-columns: minmax(0, 1.06fr) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+.sim-left, .sim-right { display: flex; flex-direction: column; gap: 16px; }
+
+/* =====================================================================
+   3. 卡片
+   ===================================================================== */
+.sim-card {
+  position: relative;
+  background: linear-gradient(180deg, var(--bg-1), rgba(14,18,25,0.88));
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: 0 2px 0 rgba(255,255,255,0.015) inset, 0 12px 28px rgba(0,0,0,0.22);
+  transition: border-color .22s var(--ease), box-shadow .22s var(--ease);
+}
+.sim-card::before {
+  content: '';
+  position: absolute; top: 0; left: 22px; right: 22px; height: 2px;
+  background: linear-gradient(90deg, transparent, rgba(34,211,238,0.55), transparent);
+  opacity: 0; transition: opacity .25s var(--ease); z-index: 2;
+}
+.sim-card:hover { border-color: var(--border-2); box-shadow: 0 14px 34px rgba(0,0,0,0.3); }
+.sim-card:hover::before { opacity: 1; }
+
+.sim-card-head {
+  padding: 13px 17px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(180deg, rgba(34,211,238,0.035), transparent);
+}
+.sim-head-title {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font: 600 14px var(--sans);
+  color: var(--text);
+  letter-spacing: 0.1px;
+}
+.sim-head-title .ico {
+  width: 15px; height: 15px;
+  color: var(--accent);
+  padding: 3px;
+  border-radius: 6px;
+  background: var(--signal-soft);
+  box-sizing: content-box;
+}
+.sim-card-sub {
+  font: 500 11px var(--mono);
+  color: var(--text-mute);
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+.sim-card-actions { display: flex; gap: 8px; }
+.sim-card-body { padding: 16px 17px; }
+
+.sim-expr-status {
+  margin-top: 10px;
+  font: 500 12px var(--mono);
+  color: var(--text-mute);
+  min-height: 18px;
+}
+
+/* ---------- 设置网格 ---------- */
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px 14px;
+}
+.setting-cell { display: flex; flex-direction: column; gap: 5px; }
+.setting-cell label {
+  font: 600 10px var(--mono);
+  color: var(--text-mute);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+}
+.setting-cell input,
+.setting-cell select {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 8px 10px;
+  border-radius: 8px;
+  font: 500 13px var(--mono);
+  width: 100%;
+  transition: border-color .15s, box-shadow .15s, background .15s;
+}
+.setting-cell input:hover,
+.setting-cell select:hover { border-color: var(--border-2); }
+.setting-cell input:focus,
+.setting-cell select:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: var(--bg-1);
+  box-shadow: 0 0 0 3px rgba(34,211,238,0.13);
+}
+
+/* =====================================================================
+   4. 图表
+   ===================================================================== */
+.sim-chart-legend {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 12px;
+  font: 500 11px var(--mono);
+  color: var(--text-dim);
+  letter-spacing: 0.3px;
+}
+.sim-legend-item { display: inline-flex; align-items: center; gap: 7px; }
+.sim-legend-swatch {
+  width: 18px; height: 3px; border-radius: 3px;
+  background: linear-gradient(90deg, var(--accent), #7ad9ec);
+  box-shadow: 0 0 8px rgba(34,211,238,0.5);
+}
+.sim-legend-spacer { flex: 1; }
+.sim-legend-note { color: var(--text-mute); }
+
+.sim-chart-wrap {
+  width: 100%;
+  height: 320px;
+  position: relative;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background:
+    linear-gradient(180deg, rgba(34,211,238,0.045), transparent 42%),
+    var(--bg);
+  overflow: hidden;
+}
+#pnlCanvas { width: 100%; height: 100%; display: block; }
+
+/* =====================================================================
+   5. 分类条
+   ===================================================================== */
+.sim-class-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 15px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: linear-gradient(180deg, var(--bg-1), rgba(14,18,25,0.88));
+}
+.sim-class-eyebrow {
+  font: 600 10px var(--mono);
+  color: var(--text-mute);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  flex-shrink: 0;
+}
+.sim-class-list { display: flex; flex-wrap: wrap; gap: 7px; }
+.sim-class-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 11px;
+  border-radius: 999px;
+  background: var(--signal-soft);
+  border: 1px solid rgba(34,211,238,0.28);
+  color: var(--accent);
+  font: 600 11.5px var(--mono);
+  letter-spacing: 0.2px;
+}
+.sim-class-tag.power-pool {
+  background: var(--signal-2-soft);
+  border-color: rgba(245,181,68,0.3);
+  color: var(--accent-2);
+}
+.sim-class-tag.cluster {
+  background: rgba(167,139,250,0.12);
+  border-color: rgba(167,139,250,0.3);
+  color: #a78bfa;
+}
+
+/* =====================================================================
+   6. 指标卡（右侧）
+   ===================================================================== */
+.sim-metrics-body { display: flex; flex-direction: column; gap: 14px; }
+.sim-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+.sim-metric {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 15px 10px;
+  border-radius: 11px;
+  border: 1px solid var(--border);
+  background: linear-gradient(170deg, var(--bg-2), rgba(14,18,25,0.85));
+  transition: transform .18s var(--ease), border-color .18s var(--ease), box-shadow .18s var(--ease);
+}
+.sim-metric::after {
+  content: '';
+  position: absolute; top: 0; left: 18%; right: 18%; height: 2px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, transparent, rgba(34,211,238,0.6), transparent);
+  opacity: 0.5;
+  transition: opacity .2s var(--ease);
+}
+.sim-metric:hover {
+  transform: translateY(-2px);
+  border-color: rgba(34,211,238,0.4);
+  box-shadow: 0 10px 22px rgba(0,0,0,0.3);
+}
+.sim-metric:hover::after { opacity: 1; }
+
+.sim-metric-label {
+  font: 600 10px var(--mono);
+  color: var(--text-mute);
+  text-transform: uppercase;
+  letter-spacing: 0.9px;
+}
+.sim-metric-value {
+  font: 700 26px var(--display);
+  color: var(--text);
+  letter-spacing: -0.8px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+.sim-metric.pos { border-color: rgba(74,222,128,0.35); }
+.sim-metric.pos::after { background: linear-gradient(90deg, transparent, rgba(74,222,128,0.7), transparent); }
+.sim-metric.pos .sim-metric-value { color: var(--good); text-shadow: 0 0 22px rgba(74,222,128,0.25); }
+.sim-metric.neg { border-color: rgba(251,113,133,0.35); }
+.sim-metric.neg::after { background: linear-gradient(90deg, transparent, rgba(251,113,133,0.7), transparent); }
+.sim-metric.neg .sim-metric-value { color: var(--bad); text-shadow: 0 0 22px rgba(251,113,133,0.25); }
+
+/* ---------- Region 指标行 ---------- */
+.sim-region-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.sim-region-grid:not(:empty) {
+  padding-top: 14px;
+  border-top: 1px dashed var(--border);
+}
+.sim-region-row {
+  display: grid;
+  grid-template-columns: 78px repeat(6, 1fr);
+  gap: 10px;
+  align-items: center;
+  padding: 11px 13px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: linear-gradient(180deg, rgba(245,181,68,0.06), rgba(14,18,25,0.85));
+}
+.sim-region-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: 700 12px var(--mono);
+  color: var(--accent-2);
+  letter-spacing: 0.4px;
+}
+.sim-region-name::before {
+  content: '';
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent-2);
+  box-shadow: 0 0 8px rgba(245,181,68,0.6);
+}
+.sim-region-cell { text-align: center; }
+.sim-region-cell label {
+  display: block;
+  font: 600 9.5px var(--mono);
+  color: var(--text-mute);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  margin-bottom: 3px;
+}
+.sim-region-cell value {
+  display: block;
+  font: 600 15px var(--mono);
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+/* =====================================================================
+   7. 年表
+   ===================================================================== */
+.sim-table-wrap { max-height: 360px; overflow: auto; }
+.sim-yearly-table { width: 100%; }
+.sim-yearly-table th,
+.sim-yearly-table td { text-align: center; font-variant-numeric: tabular-nums; }
+.sim-yearly-table thead th {
+  position: sticky; top: 0; z-index: 1;
+  background: var(--bg-2);
+}
+.sim-yearly-table tbody tr:nth-child(even) td { background: rgba(255,255,255,0.012); }
+.sim-yearly-table tbody tr:hover td { background: var(--bg-2); }
+
+/* =====================================================================
+   8. 底部状态栏
+   ===================================================================== */
+.sim-footer {
+  position: fixed;
+  bottom: 0; left: 0; right: 0;
+  height: 46px;
+  padding: 0 22px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  background: linear-gradient(0deg, rgba(10,13,18,0.98), rgba(10,13,18,0.88));
+  backdrop-filter: blur(14px);
+  border-top: 1px solid var(--border);
+  z-index: 100;
+}
+.sim-footer-left, .sim-footer-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.sim-foot-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-1);
+  font: 600 11px var(--mono);
+  color: var(--text-mute);
+  letter-spacing: 0.4px;
+  white-space: nowrap;
+}
+.sim-foot-pill b { color: var(--text); font-weight: 700; }
+
+/* =====================================================================
+   9. 加载动画 / 动效
+   ===================================================================== */
+.sim-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-mute);
+  font-size: 13px;
+}
+.sim-loading::after {
+  content: '';
+  width: 14px; height: 14px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+@keyframes simRise {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+.sim-card,
+.sim-class-row,
+.sim-metrics .sim-metric {
+  animation: simRise .5s var(--ease) backwards;
+}
+.sim-left .sim-card:nth-child(1) { animation-delay: .02s; }
+.sim-left .sim-card:nth-child(2) { animation-delay: .08s; }
+.sim-left .sim-card:nth-child(3) { animation-delay: .14s; }
+.sim-right > *:nth-child(1) { animation-delay: .05s; }
+.sim-right > *:nth-child(2) { animation-delay: .11s; }
+.sim-right > *:nth-child(3) { animation-delay: .17s; }
+.sim-metrics .sim-metric:nth-child(1) { animation-delay: .10s; }
+.sim-metrics .sim-metric:nth-child(2) { animation-delay: .13s; }
+.sim-metrics .sim-metric:nth-child(3) { animation-delay: .16s; }
+.sim-metrics .sim-metric:nth-child(4) { animation-delay: .19s; }
+.sim-metrics .sim-metric:nth-child(5) { animation-delay: .22s; }
+.sim-metrics .sim-metric:nth-child(6) { animation-delay: .25s; }
+
+/* 顶栏指标轻微错峰入场 */
+.gmetric { animation: simRise .45s var(--ease) backwards; }
+.gmetric:nth-child(1) { animation-delay: .02s; }
+.gmetric:nth-child(2) { animation-delay: .06s; }
+.gmetric:nth-child(3) { animation-delay: .10s; }
+.gmetric:nth-child(4) { animation-delay: .14s; }
+.gmetric:nth-child(5) { animation-delay: .18s; }
+.gmetric:nth-child(6) { animation-delay: .22s; }
+.gmetric:nth-child(7) { animation-delay: .26s; }
+
+/* =====================================================================
+   10. 响应式
+   ===================================================================== */
+/* 两栏尽量保留：只在真的放不下时才收成一列 */
+@media (max-width: 1100px) {
+  .settings-grid { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 900px) {
+  .sim-workspace { grid-template-columns: 1fr; }
+}
+@media (max-width: 820px) {
+  .sim-global-metrics { display: none; }
+}
+@media (max-width: 760px) {
+  .sim-main { padding: 14px 14px 84px; }
+  .sim-topbar { padding: 0 14px; gap: 12px; }
+  .sim-live-chip { display: none; }
+  .settings-grid { grid-template-columns: repeat(2, 1fr); }
+  .sim-metrics { grid-template-columns: repeat(2, 1fr); }
+  .sim-region-row { grid-template-columns: 64px repeat(3, 1fr); }
+  .sim-region-cell:nth-child(n+5) { display: none; }
+  .sim-footer-right .sim-foot-pill { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sim-card, .sim-class-row, .sim-metric, .gmetric { animation: none !important; }
+}
+
+/* =====================================================================
+   11. 小标题可读性：所有 mono 微型标签（表格表头、指标名、设置名、
+       分类眉标、底栏 pill 等）统一提亮一档 + 放大约 1px，避免发灰看不清
+   ===================================================================== */
+.gmetric-label,
+.sim-card-sub,
+.setting-cell label,
+.sim-metric-label,
+.sim-class-eyebrow,
+.sim-region-cell label,
+.sim-foot-pill,
+.sim-expr-status,
+.sim-chart-legend,
+.sim-legend-note {
+  color: var(--text-dim);
+}
+.gmetric-label { font-size: 10.5px; }
+.sim-card-sub { font-size: 11.5px; }
+.setting-cell label { font-size: 11px; }
+.sim-metric-label { font-size: 11px; }
+.sim-class-eyebrow { font-size: 11px; }
+.sim-region-cell label { font-size: 10.5px; }
+.sim-foot-pill { font-size: 11.5px; }
+.sim-chart-legend { font-size: 11.5px; }
+.sim-yearly-table thead th {
+  font-size: 11.5px;
+  color: var(--text-dim);
+  letter-spacing: 0.7px;
+}
+
+/* =====================================================================
+   v82 · 日渗透分趋势弹窗
+   入口：顶部 Osmosis Rank 指标卡（可点击）→ 全屏遮罩 + 深蓝渐变卡片
+   ===================================================================== */
+
+/* ---------- 1. 可点击的指标卡 ---------- */
+.gmetric-clickable {
+  cursor: pointer;
+  user-select: none;
+}
+.gmetric-clickable:hover {
+  border-color: rgba(34,211,238,0.45);
+  transform: translateY(-1px);
+  box-shadow: 0 8px 22px rgba(0,0,0,0.35);
+}
+.gmetric-clickable:focus-visible {
+  outline: 2px solid rgba(34,211,238,0.6);
+  outline-offset: 2px;
+}
+/* 角标箭头用内联 SVG（不用 ↗ 字符：该字体下无字形，headless 截图会看不到）
+   定位在右下角而不是右上角：右上角被 BRAIN 来源徽标 B 占着，会重叠。 */
+.gmetric-clickable .gmetric-spark {
+  position: absolute;
+  bottom: 5px; right: 8px;
+  width: 11px; height: 11px;
+  opacity: 0.7;
+  background: no-repeat center / contain
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3.1 8.9 8.9 3.1M5 3.1h3.9v3.9' fill='none' stroke='%234D5765' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  transition: opacity .18s var(--ease), transform .18s var(--ease);
+}
+.gmetric-clickable:hover .gmetric-spark {
+  opacity: 1;
+  transform: translate(1px, -1px);
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3.1 8.9 8.9 3.1M5 3.1h3.9v3.9' fill='none' stroke='%2322D3EE' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
+/* ---------- 2. 遮罩与卡片 ---------- */
+.osm-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 400;
+  display: grid;
+  place-items: center;
+  padding: 22px;
+}
+.osm-modal[hidden] { display: none; }
+
+.osm-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(4, 7, 12, 0.74);
+  backdrop-filter: blur(6px);
+  animation: osmFade .18s var(--ease);
+}
+
+.osm-modal-card {
+  position: relative;
+  width: min(900px, 96vw);
+  max-height: 92vh;
+  overflow-y: auto;
+  padding: 24px 28px 20px;
+  border-radius: 22px;
+  background:
+    radial-gradient(760px 340px at 10% -12%, rgba(34,211,238,0.10), transparent 62%),
+    radial-gradient(620px 300px at 96% 4%, rgba(245,181,68,0.05), transparent 58%),
+    linear-gradient(180deg, #111d38 0%, #0c1428 62%, #0a1122 100%);
+  border: 1px solid rgba(72,124,205,0.30);
+  box-shadow:
+    0 34px 90px rgba(0,0,0,0.62),
+    inset 0 1px 0 rgba(140,190,255,0.10);
+  animation: osmRise .24s var(--ease);
+}
+.osm-modal-card::-webkit-scrollbar { width: 8px; }
+.osm-modal-card::-webkit-scrollbar-thumb {
+  background: rgba(120,160,220,0.22);
+  border-radius: 8px;
+}
+
+.osm-modal-close {
+  position: absolute;
+  top: 14px; right: 16px;
+  width: 30px; height: 30px;
+  display: grid; place-items: center;
+  font-size: 19px;
+  line-height: 1;
+  color: var(--text-dim);
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(120,160,220,0.20);
+  border-radius: 9px;
+  cursor: pointer;
+  transition: color .16s var(--ease), background .16s var(--ease), border-color .16s var(--ease);
+}
+.osm-modal-close:hover {
+  color: #fff;
+  background: rgba(251,113,133,0.16);
+  border-color: rgba(251,113,133,0.42);
+}
+
+/* ---------- 3. 标题区 ---------- */
+.osm-modal-head { text-align: center; margin-bottom: 10px; }
+.osm-modal-eyebrow {
+  display: inline-block;
+  padding: 2px 10px;
+  margin-bottom: 8px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+  color: var(--accent);
+  background: rgba(34,211,238,0.09);
+  border: 1px solid rgba(34,211,238,0.26);
+  border-radius: 999px;
+}
+.osm-modal-title {
+  font-family: var(--display);
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  color: #EAF2FF;
+}
+.osm-modal-sub {
+  margin-top: 5px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+/* ---------- 4. 图表 ---------- */
+.osm-chart-wrap { margin: 4px 0 2px; }
+#osmChart {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.osm-grid-line { stroke: rgba(122,158,214,0.16); stroke-width: 1; }
+.osm-axis-text {
+  fill: #6E7F9C;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.osm-axis-text.is-latest { fill: #9FC4F5; font-weight: 600; }
+.osm-line {
+  fill: none;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: url(#osmLineGlow);
+}
+.osm-dot-halo { fill: rgba(96,165,250,0.30); }
+.osm-dot-ring { fill: #0B1425; stroke: rgba(147,197,253,0.85); stroke-width: 1.4; }
+.osm-dot-core { fill: #FFFFFF; }
+.osm-empty-text {
+  fill: #6E7F9C;
+  font-family: var(--sans);
+  font-size: 14px;
+  text-anchor: middle;
+}
+
+/* ---------- 5. 底部统计 ---------- */
+.osm-modal-foot {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-top: 14px;
+}
+.osm-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 9px 12px;
+  background: rgba(9,16,32,0.62);
+  border: 1px solid rgba(72,124,205,0.20);
+  border-radius: 12px;
+}
+.osm-stat-label {
+  font-size: 10.5px;
+  letter-spacing: 0.8px;
+  color: var(--text-mute);
+}
+.osm-stat-value {
+  font-family: var(--mono);
+  font-size: 17px;
+  font-weight: 600;
+  color: #DCE9FF;
+}
+
+.osm-modal-note {
+  margin-top: 12px;
+  padding: 9px 12px;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-dim);
+  background: rgba(34,211,238,0.055);
+  border-left: 2px solid rgba(34,211,238,0.45);
+  border-radius: 0 8px 8px 0;
+}
+
+@keyframes osmFade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes osmRise {
+  from { opacity: 0; transform: translateY(14px) scale(.985); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (max-width: 720px) {
+  .osm-modal-card { padding: 20px 16px 16px; border-radius: 18px; }
+  .osm-modal-foot { grid-template-columns: repeat(2, 1fr); }
+  .osm-modal-title { font-size: 18px; }
+}
+

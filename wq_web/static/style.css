@@ -72,6 +72,11 @@ body::before {
 }
 .anchors a:hover { color: var(--text); }
 .anchors a.active { color: var(--accent); border-bottom-color: var(--accent); }
+.anchors a.sim-link {
+  color: var(--accent-2);
+  border-bottom-color: transparent;
+}
+.anchors a.sim-link:hover { color: #fde68a; }
 .kbd {
   display: inline-block; padding: 2px 6px;
   background: var(--bg-3); border-radius: 3px;

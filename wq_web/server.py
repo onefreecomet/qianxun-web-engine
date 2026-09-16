@@ -21,6 +21,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from loguru import logger  # noqa: E402  （原先漏 import，导致 except 分支 logger.xxx 必炸 NameError）
+
 # 让 web server 既能从项目根（python wq_web/server.py）也能从 -m（python -m wq_web.server）跑
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -132,6 +134,11 @@ class PnlSyncState:
 
 pnl_sync_state = PnlSyncState()
 
+# Simulator 平台指标缓存：BRAIN consultant/competitions 拉取结果短 TTL，
+# 避免前端每 30s 轮询都打 BRAIN 接口（触发限流）。
+_platform_stats_cache: dict = {"ts": 0.0, "data": None}
+_PLATFORM_STATS_TTL = 120.0
+
 
 # ---------------- 并发设置（全局，提交批次时使用） ----------------
 
@@ -225,15 +232,22 @@ bus = ProgressBus()
 
 
 def _static_version() -> str:
-    """静态资源版本号：取 app.js / style.css 最后修改时间。
+    """静态资源版本号：取所有前端文件最后修改时间的最大值。
 
     前端 JS/CSS 改动后若 URL 不变，浏览器会一直用缓存，导致改了后端逻辑
     前端却毫无变化（曾因此白测一轮）。用 mtime 做版本号，文件一改自动失效。
+    注意：必须把 simulator.js / simulator.css 等页面专属文件也纳入，否则改了
+    它们浏览器仍命中旧缓存。
     """
     try:
-        js = (WEB_DIR / "static" / "app.js").stat().st_mtime
-        css = (WEB_DIR / "static" / "style.css").stat().st_mtime
-        return str(int(max(js, css)))
+        files = [
+            WEB_DIR / "static" / "app.js",
+            WEB_DIR / "static" / "style.css",
+            WEB_DIR / "static" / "simulator.js",
+            WEB_DIR / "static" / "simulator.css",
+        ]
+        mtimes = [f.stat().st_mtime for f in files if f.exists()]
+        return str(int(max(mtimes))) if mtimes else "1"
     except OSError:
         return "1"
 
@@ -247,6 +261,19 @@ async def index(request: Request) -> HTMLResponse:
         "index.html",
         context={
             "db_path": db_path,
+            "version": "v81 web alpha",
+            "static_v": _static_version(),
+        },
+    )
+
+
+@app.get("/simulator", response_class=HTMLResponse)
+async def simulator(request: Request) -> HTMLResponse:
+    """Alpha Simulator 独立页面：按 alpha ID 加载表达式、settings、PnL、指标。"""
+    return templates.TemplateResponse(
+        request,
+        "simulator.html",
+        context={
             "version": "v81 web alpha",
             "static_v": _static_version(),
         },
@@ -584,6 +611,432 @@ async def alpha_detail(alpha_id: str) -> dict:
     return {"ok": True, "alpha": a_out, "pnl": pnl}
 
 
+@app.get("/api/simulator/alpha/{alpha_id}")
+async def simulator_alpha(alpha_id: str) -> dict:
+    """Simulator 专用：返回 alpha 详情、settings、本地 PnL、逐年统计与真实分类。
+
+    每次都会从平台拉一次 alpha 详情，以获取 classifications、checks 等元信息
+    （Simulator 是低频查看页面，一次额外 API 调用可接受）。
+    """
+    st = _storage()
+    alpha = st.get_alpha(alpha_id)
+
+    # 始终从平台拉最新详情，拿到 classifications 与完整 checks
+    try:
+        detail = _client().get_alpha_details(alpha_id)
+    except Exception as e:
+        if not alpha:
+            raise HTTPException(404, f"alpha 不存在且拉取失败：{e}") from e
+        detail = None
+
+    if detail:
+        m = _client().extract_alpha_metrics(detail)
+        if m.get("alpha_id"):
+            # 顺手更新本地记录（不丢已缓存 PnL / check 结果）
+            st.upsert_alpha(m)
+            alpha = st.get_alpha(alpha_id)
+
+    if not alpha:
+        raise HTTPException(404, f"alpha 不存在：{alpha_id}")
+
+    pnl_raw = st.get_alpha_pnl(alpha_id)
+    pnl_records = []
+    if isinstance(pnl_raw, dict):
+        pnl_records = pnl_raw.get("records") or []
+    elif isinstance(pnl_raw, list):
+        pnl_records = pnl_raw
+
+    # 官方逐年统计（recordsets/yearly-stats，口径与 BRAIN 网站完全一致）
+    yearly: list[dict] = []
+    yearly_source = "platform"
+    try:
+        yearly = _client().get_alpha_yearly_stats(alpha_id, budget_s=12.0)
+    except Exception:
+        yearly = []
+    if not yearly:
+        # 官方未就绪时兜底：本地 PnL 近似（口径与官网不同，前端会标注）
+        yearly = _compute_yearly_stats(pnl_records)
+        yearly_source = "computed" if yearly else "unavailable"
+
+    a_out = _serialize(alpha)
+    for k in ("self_corr_top5", "ppa_corr_top5"):
+        if a_out.get(k):
+            try:
+                a_out[k] = json.loads(a_out[k])
+            except Exception:
+                pass
+
+    # 把平台 classifications 透传给前端
+    classifications = []
+    if detail:
+        for c in (detail.get("classifications") or []):
+            if isinstance(c, dict) and c.get("name"):
+                classifications.append({"id": c.get("id"), "name": c.get("name")})
+
+    # checks 结果也一并透传，避免前端看不到真实 FAIL/WARNING
+    checks = []
+    is_obj = (detail or {}).get("is") or {}
+    for ch in (is_obj.get("checks") or []):
+        checks.append({
+            "name": ch.get("name"),
+            "result": ch.get("result"),
+            "value": ch.get("value"),
+            "limit": ch.get("limit"),
+        })
+
+    # 平台官方 IS 指标（本地 alphas 表无 drawdown 列，必须从平台补全）
+    is_metrics = {}
+    if detail:
+        is_metrics = {
+            "sharpe": is_obj.get("sharpe"),
+            "fitness": is_obj.get("fitness"),
+            "turnover": is_obj.get("turnover"),
+            "returns": is_obj.get("returns"),
+            "drawdown": is_obj.get("drawdown"),
+            "margin": is_obj.get("margin"),
+            "long_count": is_obj.get("longCount"),
+            "short_count": is_obj.get("shortCount"),
+        }
+
+    return {
+        "ok": True,
+        "alpha": a_out,
+        "is_metrics": is_metrics,
+        "classifications": classifications,
+        "checks": checks,
+        "pnl": pnl_records,
+        "yearly": yearly,
+        "yearly_source": yearly_source,
+    }
+
+
+@app.post("/api/simulator/alpha/{alpha_id}/pnl")
+async def simulator_fetch_pnl(alpha_id: str) -> dict:
+    """从平台拉取单条 alpha 的日度 PnL，缓存到本地并返回。"""
+    st = _storage()
+    try:
+        pnl = _client().get_alpha_pnl(alpha_id)
+    except Exception as e:
+        raise HTTPException(400, f"拉取 PnL 失败：{e}") from e
+
+    # 同时更新 alpha 元信息，避免只拉 PnL 不更新详情
+    try:
+        detail = _client().get_alpha_details(alpha_id)
+        m = _client().extract_alpha_metrics(detail)
+        if m.get("alpha_id"):
+            st.upsert_alpha(m, pnl=pnl)
+    except Exception:
+        # 详情失败时至少把 PnL 写进已有记录
+        row = st.get_alpha(alpha_id)
+        if row:
+            st.upsert_alpha({k: row[k] for k in row if k not in ("pnl_json",)}, pnl=pnl)
+
+    # 官方逐年统计（用户显式同步时给足预算，触发平台记录集生成）
+    yearly: list[dict] = []
+    yearly_source = "platform"
+    try:
+        yearly = _client().get_alpha_yearly_stats(alpha_id, budget_s=60.0)
+    except Exception:
+        yearly = []
+    if not yearly:
+        yearly = _compute_yearly_stats(pnl)
+        yearly_source = "computed" if yearly else "unavailable"
+    return {
+        "ok": True,
+        "count": len(pnl),
+        "pnl": pnl,
+        "yearly": yearly,
+        "yearly_source": yearly_source,
+    }
+
+
+@app.get("/api/simulator/stats")
+async def simulator_stats() -> dict:
+    """Simulator 顶部真实统计：本地库中可计算的数字。"""
+    st = _storage()
+    total = st.count_alphas()
+    golden = st.count_golden_alphas()
+
+    # 本地回测数：simulations 表
+    sim_total = 0
+    sim_done = 0
+    try:
+        row = st._conn.execute(
+            "SELECT COUNT(*) AS n FROM simulations"
+        ).fetchone()
+        sim_total = int(row["n"]) if row else 0
+        row2 = st._conn.execute(
+            "SELECT COUNT(*) AS n FROM simulations WHERE status='completed'"
+        ).fetchone()
+        sim_done = int(row2["n"]) if row2 else 0
+    except Exception:
+        pass
+
+    # 已提交数
+    submitted = 0
+    try:
+        row = st._conn.execute("SELECT COUNT(*) AS n FROM submissions WHERE ok=1").fetchone()
+        submitted = int(row["n"]) if row else 0
+    except Exception:
+        pass
+
+    # 最近同步时间
+    last_pnl_sync = None
+    try:
+        row = st._conn.execute(
+            "SELECT MAX(pnl_fetched_at) AS ts FROM alphas"
+        ).fetchone()
+        last_pnl_sync = row["ts"]
+    except Exception:
+        pass
+
+    return {
+        "ok": True,
+        "total_alphas": total,
+        "golden_alphas": golden,
+        "simulations_total": sim_total,
+        "simulations_done": sim_done,
+        "submitted_alphas": submitted,
+        "last_pnl_sync": last_pnl_sync,
+    }
+
+
+def _brain_count_alphas_since(client, est_start_iso: str, *, submitted_only: bool = False) -> int | None:
+    """BRAIN 真实「今日」计数：按 dateCreated / dateSubmitted 过滤 alpha 列表取 count。
+
+    BRAIN 首页的 Today Simulated / Today Submitted 本质就是这个口径（美东日期）。
+    /simulations 仅 POST、/users/self/statistics 等 404，故退而用 alpha 列表的
+    dateCreated / dateSubmitted 过滤拿到真实「今日」数。返回 None 表示拉取失败（调用方回退本地库）。
+    """
+    base = "/users/self/alphas?limit=1"
+    if submitted_only:
+        base += "&status%21=UNSUBMITTED%1FIS_FAIL"
+        base += f"&dateSubmitted%3E{est_start_iso}"
+    else:
+        base += f"&dateCreated%3E{est_start_iso}"
+    try:
+        resp = client._request_with_retry("GET", base, op_name="sim_count_alphas")
+        if resp.status_code < 400:
+            return int(resp.json().get("count", 0) or 0)
+    except Exception:
+        pass
+    return None
+
+
+@app.get("/api/simulator/platform-stats")
+async def simulator_platform_stats() -> dict:
+    """Simulator 顶部平台指标：用户要的 4 项全部来自 BRAIN 实时。
+
+    - Osmosis Rank / VF（Value Factor）：来自 BRAIN /users/self/consultant
+    - Today Simulated / Today Submitted：来自 BRAIN alpha 列表按美东日期过滤的 count
+      （/simulations 仅 POST、/users/self/statistics 等 404，这是唯一能拿到真实「今日」数的路径）
+    BRAIN 拉取失败时回退本工具本地库今日计数。
+
+    附带真实 consultant 字段（Community=weightFactor、Signals=submissionsCount、
+    GAC2026 排名/osScore 等）贴近 BRAIN Alpha Simulator 的 8-stat 样式。
+    BRAIN 首页的 Pyramids / Yesterday Base 无对应 API，不臆造。
+    """
+    import time as _t
+    from datetime import datetime as _dt
+
+    now = datetime.now(timezone.utc)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+
+    # BRAIN 用美东日期计「今日」
+    try:
+        from zoneinfo import ZoneInfo
+        est_start = _dt.now(ZoneInfo("America/New_York")).replace(
+            hour=0, minute=0, second=0, microsecond=0,
+        )
+        est_start_iso = est_start.isoformat()
+    except Exception:
+        est_start_iso = today_start
+
+    st = _storage()
+
+    # ---- 本地今日计数（BRAIN 拉取失败时的兜底）----
+    local_simulated = 0
+    local_submitted = 0
+    try:
+        row = st._conn.execute(
+            "SELECT COUNT(*) AS n FROM simulations WHERE created_at >= ?",
+            (today_start,),
+        ).fetchone()
+        local_simulated = int(row["n"]) if row else 0
+    except Exception:
+        pass
+    try:
+        local_submitted = st.count_simulations_since(today_start)
+    except Exception:
+        local_submitted = 0
+
+    # ---- BRAIN 实时（带短缓存，避免 30s 轮询频繁打接口）----
+    cached = _platform_stats_cache
+    brain = None
+    if cached.get("data") and (_t.time() - cached.get("ts", 0)) < _PLATFORM_STATS_TTL:
+        brain = cached["data"]
+    else:
+        brain = {"ok": False}
+        try:
+            client = _client()
+            cons_resp = client._request_with_retry(
+                "GET", "/users/self/consultant", op_name="sim_consultant",
+            )
+            comps: list[dict] = []
+            today_simulated = None
+            today_submitted = None
+            if cons_resp.status_code < 400:
+                lb = cons_resp.json().get("leaderboard", {})
+                try:
+                    comp_resp = client._request_with_retry(
+                        "GET", "/users/self/competitions?limit=20",
+                        op_name="sim_competitions",
+                    )
+                    if comp_resp.status_code < 400:
+                        comps = comp_resp.json().get("results", [])
+                except Exception:
+                    comps = []
+                # 真实「今日」计数（美东日期）
+                today_simulated = _brain_count_alphas_since(client, est_start_iso, submitted_only=False)
+                today_submitted = _brain_count_alphas_since(client, est_start_iso, submitted_only=True)
+                brain = {
+                    "ok": True,
+                    "osmosis_rank": lb.get("dailyOsmosisRank"),
+                    "vf": lb.get("valueFactor"),
+                    "community": lb.get("weightFactor"),
+                    "signals": lb.get("submissionsCount"),
+                    "data_fields_used": lb.get("dataFieldsUsed"),
+                    "mean_prod_corr": lb.get("meanProdCorrelation"),
+                    "mean_self_corr": lb.get("meanSelfCorrelation"),
+                    "today_simulated": today_simulated,
+                    "today_submitted": today_submitted,
+                    "competitions": [
+                        {
+                            "id": c.get("id"),
+                            "name": c.get("name"),
+                            "rank": (c.get("leaderboard") or {}).get("rank"),
+                            "os_score": (c.get("leaderboard") or {}).get("osScore"),
+                            "is_score": (c.get("leaderboard") or {}).get("isScore"),
+                            "total_score": (c.get("leaderboard") or {}).get("totalScore"),
+                            "alphas": (c.get("leaderboard") or {}).get("alphas"),
+                        }
+                        for c in comps
+                    ],
+                }
+                cached["data"] = brain
+                cached["ts"] = _t.time()
+        except Exception as e:
+            brain = {"ok": False, "error": str(e)[:200]}
+
+    gac = next(
+        (c for c in brain.get("competitions", []) if c.get("id") == "GAC2026"), None,
+    )
+
+    # ---- 顺带记一笔「日渗透分」快照 ----
+    # BRAIN 只给当日 dailyOsmosisRank，没有历史序列接口，所以历史只能在本地按天攒。
+    # 前端每 30s 轮询本接口，等于自动持续记录；同一天多次写入覆盖为当日最新值。
+    try:
+        if brain.get("osmosis_rank") is not None:
+            st.upsert_osmosis_daily(
+                est_start_iso[:10], brain.get("osmosis_rank"), brain.get("vf"),
+            )
+    except Exception:  # noqa: BLE001
+        logger.debug("写入 osmosis 日快照失败（不影响接口返回）")
+
+    return {
+        "ok": True,
+        "today_simulated": brain.get("today_simulated")
+        if brain.get("today_simulated") is not None else local_simulated,
+        "today_submitted": brain.get("today_submitted")
+        if brain.get("today_submitted") is not None else local_submitted,
+        "osmosis_rank": brain.get("osmosis_rank"),
+        "vf": brain.get("vf"),
+        "community": brain.get("community"),
+        "signals": brain.get("signals"),
+        "data_fields_used": brain.get("dataFieldsUsed"),
+        "mean_prod_corr": brain.get("mean_prod_corr"),
+        "gac_rank": gac.get("rank") if gac else None,
+        "gac_os_score": gac.get("os_score") if gac else None,
+        "brain_ok": brain.get("ok", False),
+        "fetched_at": now.isoformat(),
+    }
+
+
+def _compute_yearly_stats(pnl_records: list[dict]) -> list[dict]:
+    """从日度 PnL 序列计算逐年 Sharpe / Returns / Drawdown / Turnover 等近似统计。
+
+    平台真实 yearly stats 与本地 bookSize 口径不同，这里给出基于累积 PnL 的
+    可复现版本：year / sharpe / returns / drawdown / long / short。
+    """
+    if not pnl_records:
+        return []
+    # 统一字段名：date / pnl（或 date / value）
+    rows = []
+    for r in pnl_records:
+        if not isinstance(r, dict):
+            continue
+        date = r.get("date") or r.get("Date") or ""
+        pnl = r.get("pnl") if r.get("pnl") is not None else r.get("value")
+        if date is None or pnl is None:
+            continue
+        try:
+            pnl = float(pnl)
+        except Exception:
+            continue
+        rows.append({"date": str(date), "pnl": pnl})
+    if not rows:
+        return []
+    rows.sort(key=lambda x: x["date"])
+
+    import math
+    from collections import defaultdict
+    by_year: dict[str, list[float]] = defaultdict(list)
+    for r in rows:
+        year = r["date"][:4]
+        by_year[year].append(r["pnl"])
+
+    out = []
+    cumulative = 0.0
+    peak = 0.0
+    for year in sorted(by_year.keys()):
+        vals = by_year[year]
+        n = len(vals)
+        if n == 0:
+            continue
+        total = sum(vals)
+        mean = total / n
+        variance = sum((v - mean) ** 2 for v in vals) / n
+        std = math.sqrt(variance) if variance > 0 else 0
+        sharpe = mean / std * math.sqrt(252) if std > 0 else 0
+
+        # 年内 drawdown（基于累积 PnL）
+        local_peak = cumulative
+        local_max_dd = 0.0
+        for v in vals:
+            cumulative += v
+            if cumulative > local_peak:
+                local_peak = cumulative
+            dd = local_peak - cumulative
+            if dd > local_max_dd:
+                local_max_dd = dd
+        peak = max(peak, cumulative)
+
+        # 简单 long/short 计数：按 PnL 正负（仅示意）
+        long_count = sum(1 for v in vals if v > 0)
+        short_count = sum(1 for v in vals if v < 0)
+
+        out.append({
+            "year": year,
+            "sharpe": round(sharpe, 2),
+            "returns": round(total, 4),
+            "drawdown": round(local_max_dd, 4),
+            "long": long_count,
+            "short": short_count,
+            "days": n,
+        })
+    return out
+
+
 # ---------------- 并发设置接口 ----------------
 
 
@@ -909,6 +1362,89 @@ async def osmosis_config() -> dict:
 @app.get("/api/osmosis/rules")
 async def osmosis_rules() -> dict:
     return {"ok": True, "rules": OSMOSIS_RULES}
+
+
+# ---------------- 日渗透分（dailyOsmosisRank）历史 ----------------
+#
+# BRAIN 只有 /users/self/consultant 的「当日」dailyOsmosisRank，没有历史序列接口
+# （/users/self/consultant/history、/users/self/osmosis/history 都 404，2026-09-14 实测）。
+# 所以趋势图的历史只能本地按天攒：两个写入点 + 一个读接口。
+
+_OSMOSIS_SNAPSHOT_INTERVAL = 1800.0  # 后台补记间隔（秒）
+
+
+def _est_today() -> str:
+    """美东日期 YYYY-MM-DD。BRAIN 的日度口径就是美东，本地库里必须对齐。"""
+    try:
+        from zoneinfo import ZoneInfo
+
+        return datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
+    except Exception:  # noqa: BLE001
+        return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+def _record_osmosis_now() -> dict | None:
+    """抓一次 BRAIN consultant，把当日日渗透分写进本地快照表。
+
+    只读 BRAIN，绝不写平台。失败返回 None（不抛），调用方不该因此报错。
+    """
+    try:
+        client = _client()
+        resp = client._request_with_retry(
+            "GET", "/users/self/consultant", op_name="osmosis_snapshot",
+        )
+        if resp.status_code >= 400:
+            return None
+        lb = resp.json().get("leaderboard", {}) or {}
+        rank = lb.get("dailyOsmosisRank")
+        vf = lb.get("valueFactor")
+        day = _est_today()
+        _storage().upsert_osmosis_daily(day, rank, vf)
+        return {"day": day, "rank": rank, "vf": vf}
+    except Exception as e:  # noqa: BLE001
+        logger.debug("抓取 osmosis 快照失败：{}", str(e)[:160])
+        return None
+
+
+@app.get("/api/osmosis/history")
+async def osmosis_history(days: int = 90, refresh: int = 1) -> dict:
+    """日渗透分趋势序列。Simulator 顶部点 Osmosis Rank 卡片看的就是它。
+
+    refresh=1（默认）先抓一次实时值补写今天，保证点开就有最新点；
+    历史点来自本地 osmosis_daily 表，两个写入点：
+      1. /api/simulator/platform-stats（页面每 30s 轮询，顺带记录）
+      2. 后台定时器（每 30 分钟，不开页面也在记录）
+    """
+    if refresh:
+        await asyncio.to_thread(_record_osmosis_now)
+    st = _storage()
+    pts = st.list_osmosis_daily(days=max(1, min(int(days), 365)))
+    return {
+        "ok": True,
+        "metric": "dailyOsmosisRank",
+        "metric_label": "日渗透分",
+        "note": "BRAIN 无历史接口，历史由本服务按天快照累积（美东日期）",
+        "today": _est_today(),
+        "count": len(pts),
+        "latest": st.latest_osmosis_daily(),
+        "points": pts,
+    }
+
+
+async def _osmosis_snapshot_loop() -> None:
+    """后台定时补记日渗透分（页面不开也在攒历史）。"""
+    await asyncio.sleep(8)  # 等应用完全起来再打 BRAIN，避免和首屏请求抢认证
+    while True:
+        try:
+            await asyncio.to_thread(_record_osmosis_now)
+        except Exception:  # noqa: BLE001
+            pass
+        await asyncio.sleep(_OSMOSIS_SNAPSHOT_INTERVAL)
+
+
+@app.on_event("startup")
+async def _start_osmosis_snapshot_loop() -> None:
+    asyncio.create_task(_osmosis_snapshot_loop())
 
 
 @app.get("/api/osmosis/tracks")

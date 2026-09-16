@@ -772,6 +772,49 @@ class APIClient:
             f"get_alpha_pnl[{alpha_id}] 重试 {self.config.max_retries} 次后记录集仍未就绪"
         )
 
+    def get_alpha_yearly_stats(self, alpha_id: str, budget_s: float = 30.0) -> list[dict]:
+        """拉取**官方**逐年统计（recordsets/yearly-stats），口径与 BRAIN 网站完全一致。
+
+        返回记录形如：
+          {"year": "2014", "pnl": 644946.0, "bookSize": 20000000,
+           "longCount": 1085, "shortCount": 1422, "turnover": 0.0622,
+           "sharpe": 1.86, "returns": 0.0618, "drawdown": 0.0315,
+           "margin": 0.001985, "fitness": 1.31, "stage": "IS"}
+        单位：turnover/returns/drawdown 为小数比率；margin 为万分率（×10000 = bps）。
+
+        记录集生成需要时间：空 body + Retry-After，按预算轮询；超预算抛 RateLimitError。
+        """
+        deadline = time.time() + budget_s
+        while True:
+            resp = self._request_with_retry(
+                "GET", f"/alphas/{alpha_id}/recordsets/yearly-stats",
+                op_name=f"get_yearly_stats[{alpha_id}]",
+            )
+            retry_after = self._parse_retry_after(resp.headers.get("Retry-After"))
+            text = resp.text.strip()
+            if text:
+                try:
+                    data = resp.json()
+                except Exception:
+                    data = None
+                if isinstance(data, dict) and "records" in data:
+                    props = [
+                        p.get("name")
+                        for p in (data.get("schema") or {}).get("properties") or []
+                    ]
+                    out: list[dict] = []
+                    for rec in data["records"]:
+                        if isinstance(rec, dict):
+                            out.append(dict(rec))
+                        elif isinstance(rec, (list, tuple)):
+                            out.append(dict(zip(props, rec)))
+                    return out
+            if time.time() >= deadline:
+                raise RateLimitError(
+                    f"get_alpha_yearly_stats[{alpha_id}] 预算 {budget_s}s 内记录集未就绪"
+                )
+            time.sleep(min(retry_after if retry_after is not None else 2.0, 10.0))
+
     @staticmethod
     def parse_alpha_metrics(details: dict) -> dict:
         """从 alpha 详情提取入库所需的指标字段（storage.upsert_alpha 的输入）。"""

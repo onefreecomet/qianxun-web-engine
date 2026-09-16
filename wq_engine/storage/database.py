@@ -225,6 +225,16 @@ class Storage:
         value TEXT,
         updated_at TEXT NOT NULL
     );
+
+    -- ===== 日渗透分快照（v82）：BRAIN 只提供当日 dailyOsmosisRank，无历史接口 =====
+    -- 由 /api/simulator/platform-stats 与后台定时器按「美东日期」写入，
+    -- 同一天多次写入覆盖（保留当日最新值），累积成日度趋势序列。
+    CREATE TABLE IF NOT EXISTS osmosis_daily (
+        day TEXT PRIMARY KEY,            -- 美东日期 YYYY-MM-DD
+        rank REAL,                       -- dailyOsmosisRank（0~1 小数，BRAIN 口径）
+        vf REAL,                         -- valueFactor 同日快照（顺带存，做对照）
+        updated_at TEXT NOT NULL         -- 该日最后一次写入时间（UTC ISO）
+    );
     """
 
     def __init__(self, db_path: str | Path):
@@ -1025,6 +1035,55 @@ class Storage:
                 "SELECT value FROM platform_meta WHERE key=?", (key,)
             ).fetchone()
         return row["value"] if row else None
+
+    # -------- 日渗透分快照（v82） --------
+
+    def upsert_osmosis_daily(
+        self,
+        day: str,
+        rank: float | None,
+        vf: float | None = None,
+    ) -> None:
+        """写入某一天的 osmosis 快照（同一天重复调用覆盖为最新值）。
+
+        day 用「美东日期」（BRAIN 的日度口径就是美东），rank 即
+        /users/self/consultant 的 leaderboard.dailyOsmosisRank。
+        rank 为 None 时跳过写入：拿不到值不该污染趋势线。
+        """
+        if rank is None:
+            return
+        now = datetime.now(timezone.utc).isoformat()
+        with self._lock:
+            self._conn.execute(
+                """INSERT INTO osmosis_daily (day, rank, vf, updated_at)
+                   VALUES (?,?,?,?)
+                   ON CONFLICT(day) DO UPDATE SET
+                       rank=excluded.rank,
+                       vf=COALESCE(excluded.vf, osmosis_daily.vf),
+                       updated_at=excluded.updated_at""",
+                (str(day), float(rank), None if vf is None else float(vf), now),
+            )
+            self._conn.commit()
+
+    def list_osmosis_daily(self, days: int = 90) -> list[dict]:
+        """取最近 N 天的 osmosis 快照，按日期升序（画趋势线用）。"""
+        limit = max(1, int(days))
+        with self._lock:
+            rows = self._conn.execute(
+                """SELECT day, rank, vf, updated_at FROM osmosis_daily
+                   ORDER BY day DESC LIMIT ?""",
+                (limit,),
+            ).fetchall()
+        return [dict(r) for r in reversed(rows)]
+
+    def latest_osmosis_daily(self) -> dict | None:
+        """取最新一条 osmosis 快照（判断「今天是否已记录」用）。"""
+        with self._lock:
+            row = self._conn.execute(
+                """SELECT day, rank, vf, updated_at FROM osmosis_daily
+                   ORDER BY day DESC LIMIT 1""",
+            ).fetchone()
+        return dict(row) if row else None
 
     def push_ai_command(self, command: str, payload: dict | None = None) -> int:
         """AI 侧提交命令（如 run_batch）。返回命令 id。"""

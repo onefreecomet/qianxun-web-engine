@@ -8,6 +8,30 @@
 
 ---
 
+## 界面预览
+
+**总览（指挥中心）**
+
+![总览](docs/screenshots/01-overview.png)
+
+**Alpha Simulator（单 alpha 回放与指标分析）**
+
+![Alpha Simulator](docs/screenshots/02-alpha-simulator.png)
+
+**Credits 积分列表**
+
+![Credits](docs/screenshots/03-credits.png)
+
+**已提交 Alpha 清单**
+
+![已提交 Alpha 清单](docs/screenshots/04-submitted-alphas.png)
+
+**每日 Base Payment 趋势**
+
+![Base Payment](docs/screenshots/05-base-payment.png)
+
+---
+
 ## 特性
 
 | 模块 | 说明 |
@@ -18,6 +42,8 @@
 | PnL 同步 | 拉取 PnL、本地计算 Self/PPA 相关性（手动触发，不自动烧资源） |
 | Alpha 备忘录 | 按 region 分组的候选 alpha 跟踪，金字塔主题、提交状态、手写备注、直接提交 |
 | 提示词库 | 可自定义名字的提示词列表，一键复制 |
+| Alpha Simulator | 单 alpha 回放页：表达式、settings、指标卡、PnL 曲线、年度统计、平台统计 |
+| Osmosis 历史 | 后台定时快照 Osmosis 积分，形成 90 天历史曲线 |
 | MCP Server | 7 个工具，覆盖登录 / 提交 / 等待 / 分析全流程 |
 
 ---

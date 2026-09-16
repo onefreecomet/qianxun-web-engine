@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>Alpha Simulator · 千寻 web</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css?v={{ static_v }}">
+  <link rel="stylesheet" href="/static/simulator.css?v={{ static_v }}">
+</head>
+<body class="sim-body">
+  <header class="sim-topbar">
+    <div class="sim-brand">
+      <div class="brand-mark">千</div>
+      <div class="brand-info">
+        <span class="brand-name">Alpha Simulator</span>
+        <span class="brand-ver">{{ version }}</span>
+      </div>
+    </div>
+
+    <div class="sim-global-metrics">
+      <div class="gmetric gmetric-live">
+        <span class="gmetric-label">Today Simulated <i class="gsrc gsrc-live" title="实时来自 BRAIN alpha 列表（美东今日，本地库兜底）">B</i></span>
+        <span class="gmetric-value" id="gTodaySim">0</span>
+      </div>
+      <div class="gmetric gmetric-live">
+        <span class="gmetric-label">Today Submitted <i class="gsrc gsrc-live" title="实时来自 BRAIN 已提交 alpha（美东今日，本地库兜底）">B</i></span>
+        <span class="gmetric-value" id="gTodaySub">0</span>
+      </div>
+      <div class="gmetric gmetric-live gmetric-clickable" id="osmosisCard"
+           role="button" tabindex="0"
+           title="点击查看「日渗透分变化趋势」（本机按天记录，BRAIN 无历史接口）">
+        <span class="gmetric-label">Osmosis Rank <i class="gsrc gsrc-live" title="实时来自 BRAIN /users/self/consultant">B</i></span>
+        <span class="gmetric-value" id="gOsmosisRank">—</span>
+        <span class="gmetric-spark" id="osmSpark" aria-hidden="true"></span>
+      </div>
+      <div class="gmetric gmetric-live">
+        <span class="gmetric-label">VF <i class="gsrc gsrc-live" title="实时来自 BRAIN，Value Factor">B</i></span>
+        <span class="gmetric-value" id="gVF">—</span>
+      </div>
+      <span class="gmetric-sep" aria-hidden="true"></span>
+      <div class="gmetric gmetric-sec">
+        <span class="gmetric-label">Community</span>
+        <span class="gmetric-value" id="gCommunity">—</span>
+      </div>
+      <div class="gmetric gmetric-sec">
+        <span class="gmetric-label">Signals</span>
+        <span class="gmetric-value" id="gSignals">—</span>
+      </div>
+      <div class="gmetric gmetric-sec">
+        <span class="gmetric-label">GAC2026 Rank</span>
+        <span class="gmetric-value" id="gGacRank">—</span>
+      </div>
+    </div>
+
+    <div class="sim-topbar-right">
+      <span class="sim-live-chip" title="顶部指标来自 BRAIN 实时接口"><span class="sim-live-dot"></span>BRAIN 实时</span>
+      <a class="btn" href="/" target="_blank" rel="noopener">指挥中心</a>
+      <button class="btn btn-primary" id="btnLoadAlpha">加载 Alpha</button>
+    </div>
+  </header>
+
+  <main class="sim-main">
+    <!-- 标签栏 -->
+    <div class="sim-tabs" id="simTabs">
+      <div class="sim-tab active" data-tab="0">
+        <span class="sim-tab-dot"></span>
+        <span class="sim-tab-title">Simulate 1</span>
+        <button class="sim-tab-close" title="关闭">×</button>
+      </div>
+      <button class="sim-tab-add" id="btnAddTab" title="新增模拟标签">+</button>
+    </div>
+
+    <div class="sim-workspace">
+      <!-- 左侧：表达式、设置、PnL 图 -->
+      <div class="sim-left">
+        <div class="sim-card">
+          <div class="sim-card-head">
+            <span class="sim-head-title">
+              <svg class="ico" viewBox="0 0 24 24"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+              Alpha Expression
+            </span>
+            <div class="sim-card-actions">
+              <button class="btn-mini" id="btnFetchPnl">拉取 PnL</button>
+              <button class="btn-mini" id="btnCopyExpr">Copy</button>
+              <button class="btn-mini" id="btnImportExpr">Import</button>
+            </div>
+          </div>
+          <div class="sim-card-body">
+            <textarea id="alphaExpression" rows="4" placeholder="输入 FASTEXPR 表达式，如 rank(ts_delta(close, 5))"></textarea>
+            <div class="sim-expr-status" id="exprStatus">等待加载…</div>
+          </div>
+        </div>
+
+        <div class="sim-card">
+          <div class="sim-card-head">
+            <span class="sim-head-title">
+              <svg class="ico" viewBox="0 0 24 24"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
+              Simulation Settings
+            </span>
+            <div class="sim-card-actions">
+              <button class="btn-mini" id="btnCopySettings">Copy ES</button>
+              <button class="btn-mini" id="btnImportSettings">Import ES</button>
+            </div>
+          </div>
+          <div class="sim-card-body">
+            <div class="settings-grid">
+              <div class="setting-cell">
+                <label>Region</label>
+                <select id="setRegion">
+                  <option>USA</option><option>GLB</option><option>GBR</option>
+                  <option>IND</option><option>EUR</option><option>CHN</option>
+                  <option>JPN</option><option>ASI</option><option>DEU</option>
+                  <option>HKG</option><option>AMR</option><option>KOR</option>
+                  <option>TWN</option>
+                </select>
+              </div>
+              <div class="setting-cell">
+                <label>Universe</label>
+                <select id="setUniverse">
+                  <option>TOP3000</option><option>TOP2000</option>
+                  <option>TOP1000</option><option>TOP500</option>
+                  <option>MINVOL1M</option><option>SP500</option>
+                </select>
+              </div>
+              <div class="setting-cell">
+                <label>Delay</label>
+                <input id="setDelay" type="number" value="1" min="0" max="5">
+              </div>
+              <div class="setting-cell">
+                <label>Decay</label>
+                <input id="setDecay" type="number" value="4" min="0" max="20">
+              </div>
+              <div class="setting-cell">
+                <label>Neutral</label>
+                <select id="setNeutral">
+                  <option>INDUSTRY</option><option>SECTOR</option>
+                  <option>SUBINDUSTRY</option><option>MARKET</option>
+                  <option>CROWDING</option><option>STATISTICAL</option>
+                  <option>COUNTRY</option><option>REGION</option>
+                </select>
+              </div>
+              <div class="setting-cell">
+                <label>Truncation</label>
+                <input id="setTruncation" type="number" value="0.08" step="0.01" min="0" max="1">
+              </div>
+              <div class="setting-cell">
+                <label>Pasteur</label>
+                <select id="setPasteur">
+                  <option value="ON">ON</option>
+                  <option value="OFF">OFF</option>
+                </select>
+              </div>
+              <div class="setting-cell">
+                <label>NaN</label>
+                <select id="setNan">
+                  <option value="OFF">OFF</option>
+                  <option value="ON">ON</option>
+                </select>
+              </div>
+              <div class="setting-cell">
+                <label>Max Trade</label>
+                <input id="setMaxTrade" type="text" value="OFF">
+              </div>
+              <div class="setting-cell">
+                <label>Max Pos</label>
+                <input id="setMaxPos" type="text" value="OFF">
+              </div>
+              <div class="setting-cell">
+                <label>Language</label>
+                <select id="setLang">
+                  <option>FASTEXPR</option>
+                  <option>PYTHON</option>
+                </select>
+              </div>
+              <div class="setting-cell">
+                <label>Lookback</label>
+                <input id="setLookback" type="number" value="0" min="0">
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="sim-card sim-chart-card">
+          <div class="sim-card-head">
+            <span class="sim-head-title">
+              <svg class="ico" viewBox="0 0 24 24"><polyline points="3 17 9 11 13 15 21 7"/><polyline points="15 7 21 7 21 13"/></svg>
+              PnL Curve
+            </span>
+            <span class="muted sim-card-sub" id="pnlRange">—</span>
+          </div>
+          <div class="sim-card-body">
+            <div class="sim-chart-legend">
+              <span class="sim-legend-item"><span class="sim-legend-swatch"></span>Cumulative PnL</span>
+              <span class="sim-legend-spacer"></span>
+              <span class="sim-legend-note" id="pnlCount">—</span>
+            </div>
+            <div class="sim-chart-wrap">
+              <canvas id="pnlCanvas" width="700" height="320"></canvas>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 右侧：分类指标 + yearly stats -->
+      <div class="sim-right">
+        <div class="sim-class-row" id="classificationsRow">
+          <span class="sim-class-eyebrow">Classification</span>
+          <span class="sim-class-list" id="classificationsList"><span class="muted">未加载</span></span>
+        </div>
+
+        <div class="sim-card">
+          <div class="sim-card-head">
+            <span class="sim-head-title">
+              <svg class="ico" viewBox="0 0 24 24"><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></svg>
+              Alpha Metrics
+            </span>
+            <span class="sim-card-sub">IS · 单 Alpha</span>
+          </div>
+          <div class="sim-card-body sim-metrics-body">
+            <div class="sim-metrics" id="metricsPanel">
+              <div class="sim-metric">
+                <span class="sim-metric-label">Sharpe</span>
+                <span class="sim-metric-value" id="mSharpe">—</span>
+              </div>
+              <div class="sim-metric">
+                <span class="sim-metric-label">Turnover</span>
+                <span class="sim-metric-value" id="mTurnover">—</span>
+              </div>
+              <div class="sim-metric">
+                <span class="sim-metric-label">Fitness</span>
+                <span class="sim-metric-value" id="mFitness">—</span>
+              </div>
+              <div class="sim-metric">
+                <span class="sim-metric-label">Returns</span>
+                <span class="sim-metric-value" id="mReturns">—</span>
+              </div>
+              <div class="sim-metric">
+                <span class="sim-metric-label">Drawdown</span>
+                <span class="sim-metric-value" id="mDrawdown">—</span>
+              </div>
+              <div class="sim-metric">
+                <span class="sim-metric-label">Margin</span>
+                <span class="sim-metric-value" id="mMargin">—</span>
+              </div>
+            </div>
+            <div class="sim-region-grid" id="regionGrid">
+              <!-- 按 region 的指标行，动态生成 -->
+            </div>
+          </div>
+        </div>
+
+        <div class="sim-card">
+          <div class="sim-card-head">
+            <span class="sim-head-title">
+              <svg class="ico" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>
+              Yearly Statistics
+            </span>
+            <span class="sim-card-sub">PnL 派生</span>
+          </div>
+          <div class="sim-card-body" style="padding:0">
+            <div class="sim-table-wrap">
+              <table class="data-table sim-yearly-table">
+                <thead>
+                  <tr>
+                    <th>Year</th>
+                    <th>Sharpe</th>
+                    <th>Fitness</th>
+                    <th>Turnover</th>
+                    <th>Returns</th>
+                    <th>Drawdown</th>
+                    <th>Margin</th>
+                    <th>Long</th>
+                    <th>Short</th>
+                  </tr>
+                </thead>
+                <tbody id="yearlyBody">
+                  <tr><td colspan="9" class="muted" style="text-align:center;padding:20px">加载 alpha 后显示</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <footer class="sim-footer">
+    <div class="sim-footer-left">
+      <span class="sim-foot-pill">Speed <b id="fSpeed">2.19</b>/min</span>
+      <span class="sim-foot-pill">Tabs <b id="fTabs">1</b></span>
+      <span class="sim-foot-pill">Unviewed <b id="fUnviewed">0+0</b></span>
+      <span class="sim-foot-pill">Queued <b id="fQueued">0+0</b></span>
+      <span class="sim-foot-pill">Running <b id="fRunning">0/0/0</b></span>
+    </div>
+    <div class="sim-footer-right">
+      <span class="sim-foot-pill">Max Weight <b id="fMaxWeight">8</b></span>
+      <span class="sim-foot-pill">Check <b id="fCheck">—</b></span>
+      <button class="btn" id="btnCancelAll">Cancel All</button>
+    </div>
+  </footer>
+
+  <div id="toast" class="toast"></div>
+
+  <!-- 日渗透分趋势弹窗（点顶部 Osmosis Rank 卡片打开） -->
+  <div class="osm-modal" id="osmModal" hidden>
+    <div class="osm-modal-backdrop" data-osm-close></div>
+    <div class="osm-modal-card" role="dialog" aria-modal="true" aria-labelledby="osmModalTitle">
+      <button class="osm-modal-close" id="osmModalClose" title="关闭（Esc）">×</button>
+      <div class="osm-modal-head">
+        <span class="osm-modal-eyebrow">Osmosis Rank</span>
+        <h3 class="osm-modal-title" id="osmModalTitle">日渗透分变化趋势</h3>
+        <p class="osm-modal-sub" id="osmModalSub">正在读取本机记录…</p>
+      </div>
+      <div class="osm-chart-wrap">
+        <svg id="osmChart" viewBox="0 0 760 400" role="img" aria-label="日渗透分变化趋势"></svg>
+      </div>
+      <div class="osm-modal-foot">
+        <div class="osm-stat"><span class="osm-stat-label">最新</span><span class="osm-stat-value" id="osmLatest">—</span></div>
+        <div class="osm-stat"><span class="osm-stat-label">区间均值</span><span class="osm-stat-value" id="osmAvg">—</span></div>
+        <div class="osm-stat"><span class="osm-stat-label">区间最高</span><span class="osm-stat-value" id="osmMax">—</span></div>
+        <div class="osm-stat"><span class="osm-stat-label">记录天数</span><span class="osm-stat-value" id="osmDays">—</span></div>
+      </div>
+      <div class="osm-modal-note" id="osmModalNote">
+        BRAIN 只提供当日渗透分（dailyOsmosisRank），没有历史接口，趋势由本机按天累积。服务常驻即可自动记录，无需手动操作。
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/simulator.js?v={{ static_v }}"></script>
+</body>
+</html>
