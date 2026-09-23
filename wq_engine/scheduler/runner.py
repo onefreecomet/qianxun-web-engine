@@ -24,6 +24,12 @@ from loguru import logger
 from ..api.client import APIClient, BrainClientError, RateLimitError
 from ..api.config import BrainConfig
 from ..storage.database import Storage
+from .ra_common import (
+    build_sim_payload,
+    group_pending_rows,
+    is_ra_settings,
+    poll_budget_for,
+)
 
 
 ProgressCallback = Callable[[str, dict], None]
@@ -105,15 +111,13 @@ class _BatchRunnable:
             self._wait_if_paused()
 
             # --- 批量提交（multi-sim，一次 POST 全部） ---
-            sim_data_list = []
-            for rec in self.sim_records:
-                sim_settings = dict(rec["settings"])
-                sim_settings["decay"] = rec["decay"]
-                sim_data_list.append({
-                    "type": "REGULAR",
-                    "settings": sim_settings,
-                    "regular": rec["expression"],
-                })
+            # v83 RA 原生（260923）：type 由 settings 推导（region=ALL → REGION_AGNOSTIC，
+            # RA 附带幂等 settings 修正与轮询预算放宽）；REGULAR 分支与旧内联构建
+            # 逐字段一致（见 ra_common.build_sim_payload），region!=ALL 时零漂移。
+            is_ra = bool(self.sim_records) and all(
+                is_ra_settings(rec.get("settings") or {}) for rec in self.sim_records)
+            poll_budget = poll_budget_for(is_ra, scheduler.max_poll_seconds)
+            sim_data_list = [build_sim_payload(rec, is_ra) for rec in self.sim_records]
             try:
                 # 平台要求：单条 sim 必须不带数组包装直接 POST（2026-08-29 实测：
                 # multi-sim 数组只有 1 条时返回 400 "Single simulations are required
@@ -159,7 +163,7 @@ class _BatchRunnable:
             children: list | None = None
             final_status = ""
             data: dict = {}          # 兜底：轮询一次都没跑时下面引用 data 不会 NameError
-            poll_deadline = time.time() + scheduler.max_poll_seconds
+            poll_deadline = time.time() + poll_budget
             attempt = 0
             while time.time() < poll_deadline and attempt < scheduler.max_poll_attempts:
                 attempt += 1
@@ -211,7 +215,15 @@ class _BatchRunnable:
                     result.failed += len(self.sim_records)
                     return result
                 final_status = data.get("status") or ""
-                if final_status in ("COMPLETE", "ERROR"):
+                # v82（260923 实测）：WARNING 也是终态 —— 反转类表达式平台会给
+                # 「may not accept these alphas in the future」提示但模拟已成功
+                # （响应体带 alpha）。白名单漏了它会让批次死等到轮询超时。
+                if final_status in ("COMPLETE", "ERROR", "WARNING"):
+                    if final_status == "WARNING":
+                        logger.warning(
+                            "模拟完成但带 WARNING：{}",
+                            str(data.get("message") or "")[:200],
+                        )
                     children = data.get("children") or []
                     break
                 # RUNNING/QUEUED 中间态：真实模拟 5-10 分钟，慢慢等（可中断）
@@ -219,7 +231,7 @@ class _BatchRunnable:
                     break
 
             # --- 单条批次：直接从响应体取 alpha，不去 multi-sim 里找 children ---
-            # （2026-09-02 修复）走到这里说明已 COMPLETE/ERROR 或超时。
+            # （2026-09-02 修复）走到这里说明已 COMPLETE/ERROR/WARNING 或超时。
             if self._single:
                 rec0 = self.sim_records[0]
                 if children is None:
@@ -227,7 +239,7 @@ class _BatchRunnable:
                         scheduler.storage.mark_simulation_cancelled(rec0["sim_id"], "任务取消")
                         scheduler._emit("sim_failed", {"sim_id": rec0["sim_id"], "error": "任务取消", "batch_idx": self.batch_idx})
                         return result  # 取消不计入失败统计
-                    reason = f"轮询超时（{scheduler.max_poll_seconds:.0f}s 预算）"
+                    reason = f"轮询超时（{poll_budget:.0f}s 预算）"
                     scheduler.storage.mark_simulation_failed(rec0["sim_id"], reason)
                     scheduler._emit("sim_failed", {"sim_id": rec0["sim_id"], "error": reason, "batch_idx": self.batch_idx})
                     result.failed += 1
@@ -256,7 +268,7 @@ class _BatchRunnable:
                         scheduler.storage.mark_simulation_cancelled(rec["sim_id"], reason)
                         scheduler._emit("sim_failed", {"sim_id": rec["sim_id"], "error": reason, "batch_idx": self.batch_idx})
                     return result  # 取消不计入失败统计
-                reason = f"轮询超时（{scheduler.max_poll_seconds:.0f}s 预算）"
+                reason = f"轮询超时（{poll_budget:.0f}s 预算）"
                 for rec in self.sim_records:
                     scheduler.storage.mark_simulation_failed(rec["sim_id"], reason)
                     scheduler._emit("sim_failed", {"sim_id": rec["sim_id"], "error": reason, "batch_idx": self.batch_idx})
@@ -469,10 +481,9 @@ class BatchScheduler:
             })
             return
 
-        batches_data = [
-            all_pending[i:i + self.batch_size]
-            for i in range(0, len(all_pending), self.batch_size)
-        ]
+        # v83 RA 原生（260923）：RA 行独占成批（单条 POST——multi 数组对
+        # REGION_AGNOSTIC 未验证，社区与原旁路均单条）；无 RA 行时与旧切法逐位一致
+        batches_data = group_pending_rows(all_pending, self.batch_size)
         self.total_batches = len(batches_data)
         logger.info(
             "task_run {} 共 {} 个 simulation，分 {} 个 batch，并发 {}",
@@ -510,13 +521,18 @@ class BatchScheduler:
                 self._batch_results.append(result)
 
         # 固定线程池（并发 = max_concurrent_batches），替代每 batch 一个裸线程
+        # v83 RA 原生：RA 批走**独立单 worker 池**（1 条 RA = 1 Parent + 4 Child =
+        # 5 个平台并发槽，批内并行必 429），与常规池同时运行、互不占用对方名额；
+        # 非 RA 批的提交顺序、batch_idx 与行为不变。
         from concurrent.futures import ThreadPoolExecutor
         self._workers = []
-        with ThreadPoolExecutor(max_workers=max(1, self.max_concurrent_batches)) as pool:
-            futures = [
-                pool.submit(worker, idx, records)
-                for idx, records in enumerate(sim_records_per_batch)
-            ]
+        with ThreadPoolExecutor(max_workers=max(1, self.max_concurrent_batches)) as pool, \
+                ThreadPoolExecutor(max_workers=1) as ra_pool:
+            futures = []
+            for idx, records in enumerate(sim_records_per_batch):
+                is_ra_rec = bool(records) and is_ra_settings(records[0].get("settings") or {})
+                target = ra_pool if is_ra_rec else pool
+                futures.append(target.submit(worker, idx, records))
             for f in futures:
                 exc = f.exception()  # 内部已处理；兜底记录，避免静默
                 if exc is not None:

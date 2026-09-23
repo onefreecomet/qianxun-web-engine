@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>Credits 积分签到 · 千寻 web</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css?v={{ static_v }}">
+  <link rel="stylesheet" href="/static/credits.css?v={{ static_v }}">
+</head>
+<body class="xgj-body">
+
+<header class="xgj-topbar">
+  <div class="xgj-brand">
+    <span class="xgj-brand-mark">积</span>
+    <div class="xgj-brand-info">
+      <span class="xgj-brand-name">Credits 积分签到</span>
+      <span class="xgj-brand-ver">Account &amp; Check-in</span>
+    </div>
+  </div>
+  <a class="xgj-back" href="/">← 返回指挥中心</a>
+
+  <div class="xgj-topbar-right">
+    <span class="xgj-daemon" id="daemonStatus">
+      <i class="xgj-dot"></i><span id="daemonText">连接中…</span>
+    </span>
+    <button class="xgj-btn xgj-btn-ghost" id="btnRefresh" type="button">刷新</button>
+    <button class="xgj-btn xgj-btn-primary" id="btnClaim" type="button">
+      <span class="xgj-btn-label">一键领取今日积分</span>
+    </button>
+  </div>
+</header>
+
+<main class="xgj-wrap">
+
+  <section class="xgj-summary" id="summary">
+    <div class="xgj-stat-card">
+      <span class="xgj-stat-label">账号总数</span>
+      <span class="xgj-stat-value" id="statAccounts">—</span>
+    </div>
+    <div class="xgj-stat-card">
+      <span class="xgj-stat-label">今日已签到</span>
+      <span class="xgj-stat-value accent-3" id="statChecked">—</span>
+    </div>
+    <div class="xgj-stat-card">
+      <span class="xgj-stat-label">积分合计</span>
+      <span class="xgj-stat-value accent" id="statCredits">—</span>
+    </div>
+    <div class="xgj-stat-card">
+      <span class="xgj-stat-label">7 天内过期</span>
+      <span class="xgj-stat-value" id="statSoon">—</span>
+    </div>
+  </section>
+
+  <div class="xgj-banner" id="banner" hidden></div>
+
+  <section class="xgj-panel">
+    <div class="xgj-panel-head">
+      <h2>账号</h2>
+      <div class="xgj-panel-head-right">
+        <label class="xgj-chk-inline">
+          <input type="checkbox" id="autoExpand" checked>
+          <span>自动展开积分明细</span>
+        </label>
+      </div>
+    </div>
+    <div class="xgj-account-list" id="accountList">
+      <div class="xgj-skeleton-row"></div>
+      <div class="xgj-skeleton-row"></div>
+    </div>
+  </section>
+
+  <footer class="xgj-foot">
+    数据来源：WorkDaddy 本地服务 · 仅读取账号积分，不修改任何账号设置
+  </footer>
+</main>
+
+<div class="xgj-toast-stack" id="toastStack"></div>
+
+<script src="/static/credits.js?v={{ static_v }}"></script>
+</body>
+</html>

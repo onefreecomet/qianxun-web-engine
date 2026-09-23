@@ -53,6 +53,20 @@
 }
 .sim-global-metrics::-webkit-scrollbar { display: none; }
 
+/* =====================================================================
+   顶部指标卡 · 统一色阶（v83）
+   ---------------------------------------------------------------------
+   问题：青色（--accent）此前同时用于「Live 发光条」「B 徽章」「悬浮高亮」，
+   处处发光 = 没有层级；而 Community/Signals/GAC 三张卡的竖条与数值
+   用的是 --text-mute(#4D5765)，深底上像禁用态。
+   做法：建立三档语义色，语义固定、
+         —— live 实时 · info 平台聚合 · accent 可点击入口 —— 
+   ===================================================================== */
+
+/* 一档 · live：BRAIN 实时拉取的真实数值（青色） */
+/* 二档 · info：平台聚合/间接值（紫蓝色，与 live 明确区分） */
+/* 三档 · mute：本机累计/无源数据（中性亮灰，不再是死灰） */
+
 .gmetric {
   position: relative;
   display: flex;
@@ -75,7 +89,12 @@
   box-shadow: 0 0 8px rgba(34,211,238,0.55);
   opacity: 0.95;
 }
-.gmetric-sec::before { background: var(--text-mute); opacity: 0.55; }
+/* 聚合类：紫蓝竖条，和青色的 live 一眼分得开 */
+.gmetric-sec::before {
+  background: linear-gradient(180deg, #8B7BF0, #6E62D8);
+  opacity: 0.85;
+  box-shadow: 0 0 7px rgba(139,123,240,0.45);
+}
 .gmetric:hover {
   border-color: rgba(34,211,238,0.4);
   transform: translateY(-1px);
@@ -87,7 +106,7 @@
   align-items: center;
   gap: 4px;
   font: 600 9.5px var(--mono);
-  color: var(--text-mute);
+  color: #8496B0;   /* 原 --text-mute(#4D5765) 太暗，深底上几乎不可读 */
   text-transform: uppercase;
   letter-spacing: 0.9px;
   white-space: nowrap;
@@ -100,7 +119,12 @@
   white-space: nowrap;
   line-height: 1.15;
 }
-.gmetric-sec .gmetric-value { color: var(--text-dim); font-weight: 600; font-size: 16px; }
+/* 聚合类的数值用紫蓝，示意"平台口径"而非"实时值" */
+.gmetric-sec .gmetric-value {
+  color: #B9AEF7;
+  font-weight: 700;
+  font-size: 16px;
+}
 
 .gmetric-sep {
   width: 1px;
@@ -110,21 +134,21 @@
   flex: none;
 }
 
-/* 来源标记：B = BRAIN 实时 */
+/* 来源标记：B = BRAIN 实时。默认中性，仅 live 上色 */
 .gsrc {
   font: 700 8.5px var(--mono);
   font-style: normal;
   line-height: 1;
-  color: var(--text-mute);
+  color: #7C8CA4;
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 1px 3px;
   cursor: help;
 }
 .gsrc-live {
-  color: var(--accent);
-  border-color: rgba(34,211,238,0.4);
-  background: var(--signal-soft);
+  color: #0A1122;
+  border-color: rgba(34,211,238,0.75);
+  background: var(--accent);
 }
 
 /* ---------- 顶栏右侧 ---------- */
@@ -863,6 +887,20 @@
   border-left: 2px solid rgba(34,211,238,0.45);
   border-radius: 0 8px 8px 0;
 }
+.sig-note-list {
+  margin: 7px 0 2px;
+  padding-left: 18px;
+}
+.sig-note-list li {
+  margin: 3px 0;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+.sig-note-list b {
+  color: #EAF2FF;
+  font-family: var(--mono);
+  font-weight: 700;
+}
 
 @keyframes osmFade { from { opacity: 0; } to { opacity: 1; } }
 @keyframes osmRise {
@@ -870,9 +908,428 @@
   to { opacity: 1; transform: none; }
 }
 
+/* =====================================================================
+   已提交 Alpha 清单弹窗（Signals 卡片）
+   复用 .osm-modal 骨架，这里只补工具栏 / 表格 / 分页
+   ===================================================================== */
+
+.osm-modal-card-wide {
+  width: min(1320px, 97vw);
+  overflow-x: hidden;   /* 表格自己滚，卡片不横溢 */
+}
+
+/* ---------- 工具栏 ---------- */
+.sig-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 14px 0 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(72,124,205,0.18);
+}
+
+.sig-filters { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.sig-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.4px;
+  color: var(--text-dim);
+  background: rgba(9,16,32,0.60);
+  border: 1px solid rgba(72,124,205,0.20);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: color .15s var(--ease), background .15s var(--ease), border-color .15s var(--ease);
+}
+.sig-chip:hover { color: #DCE9FF; border-color: rgba(72,124,205,0.42); }
+.sig-chip.active {
+  color: #EAF2FF;
+  background: rgba(34,211,238,0.13);
+  border-color: rgba(34,211,238,0.45);
+}
+.sig-chip-count {
+  font-size: 10px;
+  color: var(--text-mute);
+}
+.sig-chip.active .sig-chip-count { color: #7FE3F5; }
+
+.sig-toolbar-right { display: flex; align-items: center; gap: 8px; }
+
+.sig-search {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  height: 30px;
+  background: rgba(9,16,32,0.60);
+  border: 1px solid rgba(72,124,205,0.20);
+  border-radius: 9px;
+  transition: border-color .15s var(--ease);
+}
+.sig-search:focus-within { border-color: rgba(34,211,238,0.45); }
+.sig-search .ico { width: 13px; height: 13px; color: var(--text-mute); flex: none; }
+.sig-search input {
+  width: 190px;
+  height: 100%;
+  font-family: var(--sans);
+  font-size: 12px;
+  color: #DCE9FF;
+  background: none;
+  border: none;
+  outline: none;
+}
+.sig-search input::placeholder { color: var(--text-mute); }
+
+.sig-select {
+  height: 30px;
+  padding: 0 8px;
+  font-family: var(--sans);
+  font-size: 12px;
+  color: #DCE9FF;
+  background: rgba(9,16,32,0.60);
+  border: 1px solid rgba(72,124,205,0.20);
+  border-radius: 9px;
+  outline: none;
+  cursor: pointer;
+}
+.sig-select:focus { border-color: rgba(34,211,238,0.45); }
+
+.sig-btn {
+  height: 30px;
+  padding: 0 14px;
+  font-family: var(--sans);
+  font-size: 12px;
+  color: #DCE9FF;
+  background: rgba(9,16,32,0.60);
+  border: 1px solid rgba(72,124,205,0.20);
+  border-radius: 9px;
+  outline: none;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background .15s, opacity .15s, border-color .15s;
+}
+.sig-btn:hover { background: rgba(34,211,238,0.12); border-color: rgba(34,211,238,0.45); }
+.sig-btn:disabled { opacity: .5; cursor: default; }
+
+/* ---------- 表格 ---------- */
+.sig-table-wrap {
+  position: relative;
+  max-height: 56vh;
+  overflow: auto;
+  border: 1px solid rgba(72,124,205,0.16);
+  border-radius: 12px;
+}
+.sig-table-wrap::-webkit-scrollbar { width: 9px; height: 9px; }
+.sig-table-wrap::-webkit-scrollbar-thumb {
+  background: rgba(120,160,220,0.22);
+  border-radius: 8px;
+}
+
+.sig-table {
+  width: 100%;
+  /* 表头字号放大后列宽总额变大；给足下限让设置列和金字塔列都有空间。
+     1280px 会超出卡片内宽（状态列被裁且横向滚动条不在视野内），收到 1180px 刚好放下 */
+  min-width: 1180px;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 12px;
+  table-layout: auto;
+}
+.sig-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 9px 9px;
+  text-align: left;
+  font-family: var(--sans);
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  /* 表头必须比正文更醒目：原为 --text-mute(#4D5765)，深底上几乎看不清 */
+  color: #A7BAD6;
+  white-space: nowrap;
+  background: #131F38;
+  border-bottom: 1.5px solid rgba(72,124,205,0.42);
+  box-shadow: 0 1px 0 rgba(0,0,0,0.35);   /* 与数据行拉开层次，滚动时更清楚 */
+}
+/* 数值列表头用青色，和左半边的文字列区分开 */
+.sig-table thead th.sig-th-num { color: #7FD8EC; }
+.sig-table thead th.sig-th-py { color: #E8B95C; }
+/* ID 列给足宽度，避免表头 "ALPHA ID" 被挤断 */
+.sig-table th.sig-th-id, .sig-table td:first-child { min-width: 86px; }
+/* 设置列给足宽度：内容最长实测需 ~221px，加 padding 后列宽钉在 250px */
+.sig-table th:nth-child(4), .sig-table td:nth-child(4) { min-width: 250px; width: 250px; }
+/* 金字塔列富余最多（实测占 263px 但内容不足），收紧后把空间让给设置列 */
+.sig-table th:nth-child(10), .sig-table td:nth-child(10) { max-width: 235px; }
+.sig-th-num, .sig-th-py { text-align: right !important; }
+.sig-table thead th:nth-child(11) { text-align: right; }
+
+.sig-table tbody tr {
+  transition: background .12s var(--ease);
+}
+.sig-table tbody tr:nth-child(even) { background: rgba(255,255,255,0.014); }
+.sig-table tbody tr:hover { background: rgba(34,211,238,0.055); }
+.sig-table tbody td {
+  padding: 6px 9px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  border-bottom: 1px solid rgba(72,124,205,0.09);
+  vertical-align: middle;
+}
+.sig-table tbody tr:last-child td { border-bottom: none; }
+.sig-table tbody td.sig-settings-cell,
+.sig-table tbody td.sig-td-py { white-space: normal; }
+
+/* ID 列：等宽 + 可点 */
+.sig-id {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: #9FC4F5;
+  text-decoration: none;
+  border-bottom: 1px dotted rgba(159,196,245,0.45);
+}
+.sig-id:hover { color: #EAF2FF; border-bottom-color: #EAF2FF; }
+
+/* 数字列 */
+.sig-num {
+  font-family: var(--mono);
+  font-size: 12px;
+  text-align: right;
+  color: #DCE9FF;
+}
+/* 日期列（提交日）与缺失值：原用 --text-mute(#4D5765)，深底上对比度仅 2.33:1，
+   远低于 WCAG AA 的 4.5:1，肉眼几乎读不出（2026-09-21 与首页 style.css 同步修）。
+   现用 --text-dim（#93A5BE，实测 6.4:1），清晰可读且仍弱于指标数字(#DCE9FF)以保留主次。 */
+.sig-num.dim { color: var(--text-dim); }
+.sig-num.good { color: #5EE9B5; }
+.sig-num.warn { color: #F5B544; }
+.sig-num.bad { color: #FB7185; }
+
+/* 区域与状态徽章 */
+.sig-region {
+  display: inline-block;
+  padding: 2px 7px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.5px;
+  color: #C7DBFF;
+  background: rgba(72,124,205,0.16);
+  border: 1px solid rgba(72,124,205,0.30);
+  border-radius: 6px;
+}
+
+.sig-status {
+  display: inline-block;
+  padding: 2px 7px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.5px;
+  border-radius: 6px;
+}
+.sig-status.is-active { color: #5EE9B5; background: rgba(94,233,181,0.10); border: 1px solid rgba(94,233,181,0.30); }
+.sig-status.is-decom  { color: #9AA9C2; background: rgba(154,169,194,0.10); border: 1px solid rgba(154,169,194,0.26); }
+
+/* 设置列：单行紧凑展示，超宽靠 title 兜底。
+   max-width 必须跟着列宽走 —— 之前写死 200px，而列宽 236px，
+   单元格可用 218px，导致 30/50 行被无谓省略。 */
+.sig-settings {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--text-mute);
+}
+.sig-settings .sep { color: rgba(122,158,214,0.45); }
+
+/* 金字塔列：限制宽度 + 允许换行，但不至于撑成多行 */
+.sig-table td.sig-td-py { max-width: 250px; }
+
+/* 金字塔标签：单行显示，超出用「+N」折叠，避免多标签把行高撑成 4 行 */
+.sig-py-wrap {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  gap: 4px;
+  align-items: center;
+  justify-content: flex-end;
+  vertical-align: middle;
+}
+.sig-py {
+  display: inline-block;
+  padding: 2px 6px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+  color: #F5B544;
+  background: rgba(245,181,68,0.10);
+  border: 1px solid rgba(245,181,68,0.30);
+  border-radius: 6px;
+}
+.sig-py .mult { color: #FCD34D; opacity: 0.85; margin-left: 2px; }
+.sig-py-more {
+  display: inline-block;
+  padding: 2px 6px;
+  font-family: var(--mono);
+  font-size: 10px;
+  white-space: nowrap;
+  color: var(--text-mute);
+  background: rgba(120,160,220,0.10);
+  border: 1px solid rgba(120,160,220,0.22);
+  border-radius: 6px;
+  cursor: help;
+}
+.sig-py-none { font-size: 11px; color: var(--text-mute); }
+
+/* 区域/状态/金字塔列宽收窄，把空间让给指标列 */
+.sig-table th:nth-child(3), .sig-table td:nth-child(3),
+.sig-table th:nth-child(11), .sig-table td:nth-child(11) { width: 1%; }
+.sig-td-py { text-align: right; white-space: nowrap; }
+
+.sig-loading {
+  padding: 34px 0;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-mute);
+}
+.sig-loading[hidden] { display: none; }
+
+/* ---------- 分页 ---------- */
+.sig-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+.sig-pager:empty { display: none; }
+.sig-page-btn {
+  min-width: 30px;
+  height: 28px;
+  padding: 0 9px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--text-dim);
+  background: rgba(9,16,32,0.60);
+  border: 1px solid rgba(72,124,205,0.20);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: color .14s var(--ease), background .14s var(--ease), border-color .14s var(--ease);
+}
+.sig-page-btn:hover:not(:disabled) { color: #EAF2FF; border-color: rgba(72,124,205,0.45); }
+.sig-page-btn.active {
+  color: #0A1122;
+  font-weight: 700;
+  background: #48B8E0;
+  border-color: #48B8E0;
+}
+.sig-page-btn:disabled { opacity: 0.38; cursor: not-allowed; }
+.sig-page-info {
+  margin-left: 6px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-mute);
+}
+
 @media (max-width: 720px) {
   .osm-modal-card { padding: 20px 16px 16px; border-radius: 18px; }
   .osm-modal-foot { grid-template-columns: repeat(2, 1fr); }
   .osm-modal-title { font-size: 18px; }
+  .sig-toolbar { flex-direction: column; align-items: stretch; }
+  .sig-toolbar-right { flex-wrap: wrap; }
+  .sig-search { flex: 1 1 100%; }
+  .sig-search input { width: 100%; }
+  .sig-table-wrap { max-height: 48vh; }
+}
+
+/* ===== Total Payment 弹窗（base-payment 折线图） ===== */
+.pay-odometer {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 16px 4px 8px;
+}
+.pay-odo-main {
+  display: flex;
+  align-items: baseline;
+  color: #fbbf24;
+  font-weight: 700;
+  line-height: 1;
+}
+.pay-odo-cur { font-size: 22px; margin-right: 2px; opacity: .82; }
+.pay-odo-val {
+  font-size: 46px;
+  font-family: var(--mono);
+  letter-spacing: -.5px;
+  font-variant-numeric: tabular-nums;
+}
+.pay-odo-date { color: var(--text-mute); font-size: 14px; }
+.pay-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  padding: 4px 4px 12px;
+  font-size: 14px;
+  color: #cdd9ec;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+.pay-summary b { color: #e6edf3; font-family: var(--mono); font-weight: 600; }
+.pay-summary .pay-sum-total b { color: #22d3ee; }
+.pay-chart-wrap {
+  overflow-x: auto;
+  overflow-y: hidden;
+  margin-top: 10px;
+  cursor: grab;
+  border-radius: 10px;
+  background: rgba(9,16,32,0.35);
+}
+.pay-chart-wrap:active { cursor: grabbing; }
+.pay-chart { display: block; }
+.pay-hint {
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--text-mute);
+  text-align: center;
+}
+
+/* 双图表横向滑动容器（两 canvas 同宽，共享 scrollLeft 对齐） */
+.pay-charts {
+  overflow-x: auto;
+  overflow-y: hidden;
+  margin-top: 10px;
+  cursor: default;
+  border-radius: 10px;
+  background: rgba(9,16,32,0.35);
+}
+.pay-charts:active { cursor: grabbing; }
+.pay-chart-block { padding: 4px 0; }
+.pay-chart-block + .pay-chart-block { border-top: 1px solid rgba(255,255,255,0.05); }
+.pay-chart-label {
+  font-size: 14px;
+  color: var(--text-mute);
+  padding: 6px 8px 2px;
+  letter-spacing: .3px;
+}
+.pay-chart { display: block; cursor: crosshair; }
+.pay-chart-sub { background: rgba(72,124,205,0.04); }
+.pay-odo-meta { display: flex; flex-direction: column; gap: 2px; }
+.pay-odo-sub { color: #cdd9ec; font-size: 15px; }
+.pay-odo-sub b {
+  color: #48B8E0;
+  font-family: var(--mono);
+  font-size: 17px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 

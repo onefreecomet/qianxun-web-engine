@@ -25,7 +25,7 @@
         <span class="gmetric-value" id="gTodaySim">0</span>
       </div>
       <div class="gmetric gmetric-live">
-        <span class="gmetric-label">Today Submitted <i class="gsrc gsrc-live" title="实时来自 BRAIN 已提交 alpha（美东今日，本地库兜底）">B</i></span>
+        <span class="gmetric-label">Pyramids Completed <i class="gsrc gsrc-live" title="来自 BRAIN genius summary（季度金字塔完成数 pyramidCount，官方口径）">B</i></span>
         <span class="gmetric-value" id="gTodaySub">0</span>
       </div>
       <div class="gmetric gmetric-live gmetric-clickable" id="osmosisCard"
@@ -40,11 +40,15 @@
         <span class="gmetric-value" id="gVF">—</span>
       </div>
       <span class="gmetric-sep" aria-hidden="true"></span>
-      <div class="gmetric gmetric-sec">
-        <span class="gmetric-label">Community</span>
+      <div class="gmetric gmetric-sec gmetric-clickable" id="totalPaymentCard"
+           role="button" tabindex="0"
+           title="点击查看每日 Base Payment 趋势（BRAIN base-payment 活动）">
+        <span class="gmetric-label">Total Payment <i class="gsrc gsrc-live" title="来自 BRAIN base-payment 活动（全部累计 total.value）">B</i></span>
         <span class="gmetric-value" id="gCommunity">—</span>
       </div>
-      <div class="gmetric gmetric-sec">
+      <div class="gmetric gmetric-sec gmetric-clickable" id="signalsCard"
+           role="button" tabindex="0"
+           title="点击查看已提交 alpha 清单（BRAIN /users/self/alphas）">
         <span class="gmetric-label">Signals</span>
         <span class="gmetric-value" id="gSignals">—</span>
       </div>
@@ -325,6 +329,105 @@
       <div class="osm-modal-note" id="osmModalNote">
         BRAIN 只提供当日渗透分（dailyOsmosisRank），没有历史接口，趋势由本机按天累积。服务常驻即可自动记录，无需手动操作。
       </div>
+    </div>
+  </div>
+
+  <!-- 已提交 Alpha 清单弹窗（点顶部 Signals 卡片打开） -->
+  <div class="osm-modal" id="sigModal" hidden>
+    <div class="osm-modal-backdrop" data-sig-close></div>
+    <div class="osm-modal-card osm-modal-card-wide" role="dialog" aria-modal="true" aria-labelledby="sigModalTitle">
+      <button class="osm-modal-close" id="sigModalClose" title="关闭（Esc）">×</button>
+      <div class="osm-modal-head">
+        <span class="osm-modal-eyebrow">Signals</span>
+        <h3 class="osm-modal-title" id="sigModalTitle">已提交 Alpha 清单</h3>
+        <p class="osm-modal-sub" id="sigModalSub">正在读取 BRAIN…</p>
+      </div>
+
+      <div class="sig-toolbar" id="sigToolbar">
+        <div class="sig-filters" id="sigRegionFilters"></div>
+        <div class="sig-toolbar-right">
+          <label class="sig-search">
+            <svg class="ico" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input type="search" id="sigSearch" placeholder="搜 ID / 区域 / 金字塔 / 表达式" autocomplete="off">
+          </label>
+          <select class="sig-select" id="sigSort" title="排序方式">
+            <option value="dateSubmitted">提交时间 ↓</option>
+            <option value="sharpe">IS Sharpe ↓</option>
+            <option value="fitness">IS Fitness ↓</option>
+            <option value="returns">IS Returns ↓</option>
+            <option value="margin">IS Margin ↓</option>
+            <option value="turnover">Turnover ↑</option>
+          </select>
+          <button class="sig-btn" id="sigRefreshBtn" title="强制重新拉取 BRAIN 已提交 alpha（绕过 120s 缓存）">⟳ 同步</button>
+        </div>
+      </div>
+
+      <div class="sig-table-wrap">
+        <table class="sig-table">
+          <thead>
+            <tr>
+              <th class="sig-th-id">Alpha ID</th>
+              <th title="按美东时间（America/New_York）归日，与 BRAIN 平台显示一致">提交日</th>
+              <th>区域</th>
+              <th>设置</th>
+              <th class="sig-th-num">Sharpe</th>
+              <th class="sig-th-num">Fitness</th>
+              <th class="sig-th-num">Returns</th>
+              <th class="sig-th-num">Turnover</th>
+              <th class="sig-th-num">Margin</th>
+              <th class="sig-th-py">金字塔</th>
+              <th>状态</th>
+            </tr>
+          </thead>
+          <tbody id="sigTbody"></tbody>
+        </table>
+        <div class="sig-loading" id="sigLoading">正在读取 BRAIN…</div>
+      </div>
+
+      <div class="sig-pager" id="sigPager"></div>
+
+      <div class="osm-modal-note" id="sigModalNote">
+        本清单是逐条拉取的明细（<code>GET /users/self/alphas</code>，已提交 = 状态非 UNSUBMITTED / IS_FAIL）。
+        注意：同一个账号在 BRAIN 里其实有<b>三个不同的「已提交数」</b>，口径由平台各自定义、互不公开，所以数字必然对不上：
+        <ul class="sig-note-list">
+          <li><b>80</b> = 顶部 SIGNALS 卡片，来自 <code>/users/self/consultant</code> 的 <code>submissionsCount</code>（leaderboard 汇总字段，可能延迟刷新）</li>
+          <li><b>87</b> = 你在 Genius 资格页（<code>platform.worldquantbrain.com/genius</code>）看到的 <code>Signals</code>，由 Genius 子系统另算（标准 BRAIN API 拿不到这个数字）</li>
+          <li><b>136</b> = 上面这份明细清单的条数（我拉到的真实数据，最可靠）</li>
+        </ul>
+        结论：卡片的 80 不是「平台数」的全集，它和 Genius 的 87 只是 BRAIN 两个不同的统计口径。本清单以逐条明细（136）为准。
+      </div>
+    </div>
+  </div>
+
+  <!-- Total Payment 弹窗：每日 Base Payment 折线图（横向滑动 + 磁吸 + odometer 联动） -->
+  <div class="osm-modal" id="payModal" hidden>
+    <div class="osm-modal-backdrop" data-pay-close></div>
+    <div class="osm-modal-card osm-modal-card-wide" role="dialog" aria-modal="true" aria-labelledby="payModalTitle">
+      <button class="osm-modal-close" id="payModalClose" title="关闭（Esc）">×</button>
+      <div class="osm-modal-head">
+        <span class="osm-modal-eyebrow">Base Payment</span>
+        <h3 class="osm-modal-title" id="payModalTitle">每日 Base Payment 趋势</h3>
+        <p class="osm-modal-sub" id="payModalSub">BRAIN base-payment 活动</p>
+      </div>
+      <div class="pay-odometer">
+        <div class="pay-odo-main"><span class="pay-odo-cur">$</span><span class="pay-odo-val" id="payOdoVal" data-v="0">0.00</span></div>
+        <div class="pay-odo-meta">
+          <div class="pay-odo-date" id="payOdoDate">—</div>
+          <div class="pay-odo-sub">当日提交 <b id="payOdoSub" data-v="0">0</b> 个 alpha</div>
+        </div>
+      </div>
+      <div class="pay-summary" id="paySummary"></div>
+      <div class="pay-charts">
+        <div class="pay-chart-block">
+          <div class="pay-chart-label">Base Payment（每日）</div>
+          <canvas id="payChart" class="pay-chart"></canvas>
+        </div>
+        <div class="pay-chart-block">
+          <div class="pay-chart-label">提交 Alpha 数（每日）</div>
+          <canvas id="subChart" class="pay-chart pay-chart-sub"></canvas>
+        </div>
+      </div>
+      <div class="pay-hint">拖拽横向滑动 · 悬停磁吸到数据点 · 顶部数值平滑联动</div>
     </div>
   </div>
 

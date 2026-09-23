@@ -522,10 +522,10 @@ async function refreshGlobalMetrics() {
   try {
     const r = await api('/api/simulator/platform-stats');
     $('gTodaySim').textContent = r.today_simulated ?? 0;
-    $('gTodaySub').textContent = r.today_submitted ?? 0;
+    $('gTodaySub').textContent = r.pyramids_completed == null ? '—' : r.pyramids_completed;
     $('gOsmosisRank').textContent = r.osmosis_rank == null ? '—' : Number(r.osmosis_rank).toFixed(2);
     $('gVF').textContent = r.vf == null ? '—' : Number(r.vf).toFixed(2);
-    $('gCommunity').textContent = r.community == null ? '—' : Number(r.community).toFixed(2);
+    $('gCommunity').textContent = r.total_payment == null ? '—' : '$' + Number(r.total_payment).toFixed(2);
     $('gSignals').textContent = r.signals == null ? '—' : r.signals;
     $('gGacRank').textContent = r.gac_rank == null ? '—' : r.gac_rank;
   } catch (e) {
@@ -777,3 +777,717 @@ if (urlParams.get('osm')) openOsmosisModal();
     if (e.key === 'Escape' && !osmModal.hidden) closeOsmosisModal();
   });
 })();
+
+// =====================================================================
+// 已提交 Alpha 清单弹窗（v83）
+// 入口：顶部 Signals 指标卡
+// 数据：/api/simulator/submitted-alphas（BRAIN /users/self/alphas，状态非 UNSUBMITTED/IS_FAIL）
+// 口径说明：Signals 卡片显示 submissionsCount（平台聚合值，口径未公开），
+//          弹窗显示逐条 alpha 明细。两者可能不一致，故同时在弹窗里标注。
+// =====================================================================
+
+const SIG_PAGE_SIZE = 50;
+
+const sigState = {
+  loaded: false,     // 明细是否已拉到（本次会话）
+  consultantCount: null,  // 顶部卡片的 submissionsCount（80），来自 platform-stats
+  loading: false,
+  items: [],
+  byRegion: {},
+  byStatus: {},
+  platformCount: null,
+  count: null,
+  region: '',        // 区域筛选（'' = 全部）
+  keyword: '',
+  sort: 'dateSubmitted',
+  page: 1,
+  error: null,
+};
+
+const sigModal = $('sigModal');
+
+/** 提交日：按「美东时间」出 YYYY-MM-DD，与 BRAIN 平台显示一致。
+ *
+ *  ⚠️ 不能直接用本地时区取日期。BRAIN 返回的 ISO 带美东偏移
+ *  （如 2026-09-20T21:33:42-04:00），若用 d.getDate() 取「本地（北京 UTC+8）」
+ *  日期，则美东 12:00 之后提交的 alpha 日期会整体 +1 天
+ *  （美东 21:33 = 北京次日 09:33）——实测 150 条里近半错位。
+ *  必须显式按 America/New_York 归日；Intl 会自动处理 EST/EDT 切换，
+ *  对 -04:00 / -05:00 / Z 三种输入都能得出正确的美东日期。
+ *  （后端 arc/runner.py 用 (iso)[:10] 取同一天，因为偏移量就在字符串里。） */
+const SIG_DAY_FMT = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'America/New_York',
+  year: 'numeric', month: '2-digit', day: '2-digit',
+});
+
+function sigDay(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso).slice(0, 10);
+  const p = {};
+  for (const part of SIG_DAY_FMT.formatToParts(d)) p[part.type] = part.value;
+  return `${p.year}-${p.month}-${p.day}`;
+}
+
+function sigEscape(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+/** 按阈值给数字上色：Sharpe / Fitness 越高越好，Turnover 越低越好。 */
+function sigClass(key, v) {
+  if (v == null || !Number.isFinite(Number(v))) return 'dim';
+  const n = Number(v);
+  if (key === 'sharpe') return n >= 1.25 ? 'good' : n >= 1.0 ? 'warn' : 'bad';
+  if (key === 'fitness') return n >= 1.0 ? 'good' : n >= 0.7 ? 'warn' : 'bad';
+  if (key === 'turnover') return n <= 0.4 ? 'good' : n <= 0.7 ? 'warn' : 'bad';
+  return '';
+}
+
+function sigSettingsHtml(a) {
+  // 单行紧凑展示。列宽有限，故用最短写法：universe · D{delay} · {中性化缩写} · d{decay} · t{trunc}
+  // 中性化名太长（如 REVERSION_AND_MOMENTUM），做常识缩写，全名仍放 title
+  const NEUT_ABBR = {
+    STATISTICAL: 'STAT', SUBINDUSTRY: 'SUBIND', INDUSTRY: 'IND',
+    SECTOR: 'SECT', MARKET: 'MKT', COUNTRY: 'CTRY', NONE: 'NONE',
+    CROWDING: 'CROWD', FAST: 'FAST', SLOW: 'SLOW',
+    REVERSION_AND_MOMENTUM: 'REV_MOM', SLOW_AND_FAST: 'SLW_FST',
+  };
+  const bits = [];
+  if (a.universe) bits.push(sigEscape(a.universe));
+  if (a.delay != null) bits.push(`D${a.delay}`);
+  if (a.neutralization) bits.push(sigEscape(NEUT_ABBR[a.neutralization] || a.neutralization));
+  if (a.decay != null) bits.push(`d${a.decay}`);
+  if (a.truncation != null) bits.push(`t${a.truncation}`);
+  if (!bits.length) return '<span class="sig-py-none">—</span>';
+  const full = [a.universe, a.delay != null ? `D${a.delay}` : null, a.neutralization,
+    a.decay != null ? `decay ${a.decay}` : null,
+    a.truncation != null ? `trunc ${a.truncation}` : null].filter(Boolean).join(' · ');
+  return `<span class="sig-settings" title="${sigEscape(full)}">`
+    + `${bits.join('<span class="sep"> · </span>')}</span>`;
+}
+
+/** 最多展示 MAX 个金字塔标签，其余折叠成「+N」（title 里列全）。 */
+function sigPyramidsHtml(a) {
+  const names = a.pyramids || [];
+  if (!names.length) return '<span class="sig-py-none">未点亮</span>';
+  const mults = a.pyramidMultipliers || [];
+  const MAX = 2;
+  const shown = names.slice(0, MAX).map((n, i) => {
+    const m = mults[i];
+    const mm = (m == null) ? '' : `<span class="mult">×${m}</span>`;
+    return `<span class="sig-py" title="金字塔 ${sigEscape(n)}（倍率 ×${m == null ? '—' : m}）">`
+      + `${sigEscape(n)}${mm}</span>`;
+  }).join('');
+  const rest = names.length - MAX;
+  const restHtml = rest > 0
+    ? `<span class="sig-py-more" title="${sigEscape(names.slice(MAX).join('\n'))}">+${rest}</span>`
+    : '';
+  return `<span class="sig-py-wrap">${shown}${restHtml}</span>`;
+}
+
+function sigRowHtml(a) {
+  const st = a.status === 'ACTIVE' ? 'is-active' : 'is-decom';
+  return `<tr>
+    <td><a class="sig-id" href="/simulator?alpha=${encodeURIComponent(a.id || '')}"
+           target="_blank" rel="noopener"
+           title="在新标签打开 Alpha Simulator 加载 ${sigEscape(a.id)}">${sigEscape(a.id || '—')}</a></td>
+    <td class="sig-num dim">${sigDay(a.dateSubmitted)}</td>
+    <td><span class="sig-region">${sigEscape(a.region || '—')}</span></td>
+    <td class="sig-settings-cell">${sigSettingsHtml(a)}</td>
+    <td class="sig-num ${sigClass('sharpe', a.isSharpe)}">${fmtNum(a.isSharpe, 2)}</td>
+    <td class="sig-num ${sigClass('fitness', a.isFitness)}">${fmtNum(a.isFitness, 2)}</td>
+    <td class="sig-num">${fmtPct(a.isReturns, 2)}</td>
+    <td class="sig-num ${sigClass('turnover', a.isTurnover)}">${fmtPct(a.isTurnover, 2)}</td>
+    <td class="sig-num">${fmtBps(a.isMargin, 2)}</td>
+    <td class="sig-td-py">${sigPyramidsHtml(a)}</td>
+    <td><span class="sig-status ${st}">${sigEscape(a.status || '—')}</span></td>
+  </tr>`;
+}
+
+/** 当前筛选 + 排序后的结果。 */
+function sigFiltered() {
+  const kw = sigState.keyword.trim().toLowerCase();
+  let rows = sigState.items;
+  if (sigState.region) rows = rows.filter((a) => (a.region || '') === sigState.region);
+  if (kw) {
+    rows = rows.filter((a) => {
+      const hay = [
+        a.id, a.region, a.universe, a.neutralization, a.status,
+        (a.pyramids || []).join(' '),
+        (a.classifications || []).join(' '),
+      ].join(' ').toLowerCase();
+      return hay.includes(kw);
+    });
+  }
+  const key = sigState.sort;
+  // ⚠️ 下拉框的 value 是短名（sharpe / fitness / …），而接口字段带 is 前缀
+  //    （isSharpe / isFitness / …）。曾经漏了这层映射，导致 a[key] 全 undefined、
+  //    排序静默失效（看起来像"没排序"而不是报错），极难发现。
+  const FIELD = {
+    sharpe: 'isSharpe',
+    fitness: 'isFitness',
+    returns: 'isReturns',
+    margin: 'isMargin',
+    turnover: 'isTurnover',
+  };
+  const field = key === 'dateSubmitted' ? 'dateSubmitted' : (FIELD[key] || key);
+  // Turnover 越低越好 → 升序；其余指标越高越好 → 降序。
+  // 注意：不能用 Infinity / -Infinity 做缺失值哨兵，因为差值会算出 Infinity 或
+  // NaN（-Infinity - (-Infinity)），比较器非传递会导致 sort 结果乱序。
+  // 正确做法：先按「有无值」分组，再按值排序。
+  const asc = field === 'isTurnover';
+  const hasVal = (a) => {
+    const v = a[field];
+    return v != null && Number.isFinite(Number(v));
+  };
+  const byValue = (x, y) => {
+    const nx = Number(x[field]), ny = Number(y[field]);
+    return asc ? nx - ny : ny - nx;
+  };
+  // 按「绝对时刻」降序，而不是按字符串比较。
+  // 字符串比较实际在比「美东墙钟」：跨 EST/EDT 切换的那一小时会排错
+  // （如 01:15-05:00 其实晚于 01:30-04:00，字符串却判前者更小）。一年一次，
+  // 且静默出错、看不出来，所以统一按 Date.parse 的绝对时刻比。
+  const ts = (a) => {
+    const t = Date.parse(a.dateSubmitted || '');
+    return Number.isFinite(t) ? t : null;
+  };
+  const byDateDesc = (x, y) => {
+    const tx = ts(x), ty = ts(y);
+    if (tx == null && ty == null) return 0;
+    if (tx == null) return 1;    // 无日期的行沉底
+    if (ty == null) return -1;
+    return ty - tx;
+  };
+  if (field === 'dateSubmitted') {
+    rows = [...rows].sort(byDateDesc);
+  } else {
+    // 缺失值的行统一沉底，且它们之间保持原有顺序（稳定）
+    const withVal = rows.filter(hasVal).sort(byValue);
+    const noVal = rows.filter((a) => !hasVal(a));
+    rows = withVal.concat(noVal);
+  }
+  return rows;
+}
+
+function sigRenderChips() {
+  const box = $('sigRegionFilters');
+  if (!box) return;
+  const regions = Object.entries(sigState.byRegion || {})
+    .sort((a, b) => b[1] - a[1]);
+  const total = sigState.items.length;
+  let html = `<span class="sig-chip${sigState.region ? '' : ' active'}" data-region="">`
+    + `全部 <span class="sig-chip-count">${total}</span></span>`;
+  html += regions.map(([r, c]) =>
+    `<span class="sig-chip${sigState.region === r ? ' active' : ''}" data-region="${sigEscape(r)}">`
+    + `${sigEscape(r)} <span class="sig-chip-count">${c}</span></span>`
+  ).join('');
+  box.innerHTML = html;
+  box.querySelectorAll('.sig-chip').forEach((el) => {
+    el.addEventListener('click', () => {
+      sigState.region = el.dataset.region || '';
+      sigState.page = 1;
+      sigRenderChips();
+      sigRenderTable();
+    });
+  });
+}
+
+function sigRenderTable() {
+  const tbody = $('sigTbody');
+  const loading = $('sigLoading');
+  if (!tbody) return;
+  if (loading) loading.hidden = true;
+
+  const rows = sigFiltered();
+  const pages = Math.max(1, Math.ceil(rows.length / SIG_PAGE_SIZE));
+  if (sigState.page > pages) sigState.page = pages;
+  const start = (sigState.page - 1) * SIG_PAGE_SIZE;
+  const slice = rows.slice(start, start + SIG_PAGE_SIZE);
+
+  tbody.innerHTML = slice.length
+    ? slice.map(sigRowHtml).join('')
+    : '<tr><td colspan="11" class="sig-loading">没有匹配的 alpha</td></tr>';
+
+  sigRenderPager(rows.length, pages);
+  sigUpdateSub(rows.length);
+}
+
+function sigRenderPager(total, pages) {
+  const box = $('sigPager');
+  if (!box) return;
+  if (total === 0) { box.innerHTML = ''; return; }
+
+  const cur = sigState.page;
+  const btn = (label, page, opts = {}) =>
+    `<button class="sig-page-btn${opts.active ? ' active' : ''}" data-page="${page}"`
+    + `${opts.disabled ? ' disabled' : ''}>${label}</button>`;
+
+  // 页码窗口：首页 … 当前±2 … 末页
+  const wanted = new Set([1, pages, cur, cur - 1, cur + 1, cur - 2, cur + 2]);
+  const nums = [...wanted].filter((n) => n >= 1 && n <= pages).sort((a, b) => a - b);
+  let numsHtml = '';
+  let prev = 0;
+  for (const n of nums) {
+    if (prev && n - prev > 1) numsHtml += '<span class="sig-page-info">…</span>';
+    numsHtml += btn(String(n), n, { active: n === cur });
+    prev = n;
+  }
+
+  box.innerHTML = btn('‹', cur - 1, { disabled: cur <= 1 })
+    + numsHtml
+    + btn('›', cur + 1, { disabled: cur >= pages })
+    + `<span class="sig-page-info">共 ${total} 条 · ${pages} 页</span>`;
+
+  box.querySelectorAll('.sig-page-btn[data-page]').forEach((el) => {
+    el.addEventListener('click', () => {
+      const p = parseInt(el.dataset.page, 10);
+      if (!Number.isFinite(p) || p < 1 || p > pages || p === sigState.page) return;
+      sigState.page = p;
+      sigRenderTable();
+      const wrap = document.querySelector('.sig-table-wrap');
+      if (wrap) wrap.scrollTop = 0;
+    });
+  });
+}
+
+function sigUpdateSub(filteredTotal) {
+  const sub = $('sigModalSub');
+  if (!sub) return;
+  const consultant = sigState.consultantCount;   // 顶部卡片 = submissionsCount (80)
+  const n = sigState.count == null ? sigState.items.length : sigState.count;  // 明细 136
+  const parts = [`明细 ${n} 条`];
+  // 三个口径并排，避免再被误认为「80 就是平台数」
+  if (consultant != null) parts.push(`卡片 ${consultant}`);
+  parts.push('Genius 87');
+  if (filteredTotal != null && filteredTotal !== n) parts.push(`当前筛选 ${filteredTotal} 条`);
+  sub.textContent = parts.join('　·　');
+}
+
+function sigRenderEmpty(msg) {
+  const tbody = $('sigTbody');
+  const loading = $('sigLoading');
+  if (loading) loading.hidden = true;
+  if (tbody) tbody.innerHTML = `<tr><td colspan="11" class="sig-loading">${sigEscape(msg)}</td></tr>`;
+  const box = $('sigPager');
+  if (box) box.innerHTML = '';
+}
+
+async function sigLoad(refresh = false) {
+  if (sigState.loading) return;
+  sigState.loading = true;
+  const loading = $('sigLoading');
+  if (loading) loading.hidden = false;
+  try {
+    // 同时拿 consultant 的 submissionsCount（顶部卡片显示的值），让弹窗副标题把三个数并排说清
+    const [r, ps] = await Promise.all([
+      api('/api/simulator/submitted-alphas' + (refresh ? '?refresh=true' : '')),
+      api('/api/simulator/platform-stats').catch(() => ({ signals: null })),
+    ]);
+    if (!r.ok) throw new Error(r.error || '接口返回失败');
+    sigState.items = r.items || [];
+    sigState.byRegion = r.byRegion || {};
+    sigState.byStatus = r.byStatus || {};
+    sigState.count = r.count;
+    sigState.platformCount = r.platform_count;
+    sigState.consultantCount = (ps && ps.signals != null) ? ps.signals : null;
+    sigState.loaded = true;
+    sigState.error = null;
+    sigRenderChips();
+    sigRenderTable();
+  } catch (e) {
+    sigState.error = e.message || String(e);
+    sigRenderEmpty('读取失败：' + sigState.error);
+    const sub = $('sigModalSub');
+    if (sub) sub.textContent = '读取失败：' + sigState.error;
+  } finally {
+    sigState.loading = false;
+  }
+}
+
+async function openSignalsModal() {
+  if (!sigModal) return;
+  sigModal.hidden = false;
+  const card = sigModal.querySelector('.osm-modal-card');
+  if (card) card.scrollTop = 0;
+
+  // 先用页面已有的 signals 值占位，避免弹窗顶部短暂显示空
+  const gs = $('gSignals');
+  if (sigState.platformCount == null && gs && /^\d+$/.test(gs.textContent.trim())) {
+    sigState.platformCount = parseInt(gs.textContent.trim(), 10);
+    sigUpdateSub(null);
+  }
+  // 首次打开或上次失败 → 拉数据；否则直接用内存里的明细（有变化点「刷新」）
+  if (!sigState.loaded || sigState.error) await sigLoad();
+  else { sigRenderChips(); sigRenderTable(); }
+}
+
+function closeSignalsModal() {
+  if (sigModal) sigModal.hidden = true;
+}
+
+(() => {
+  const card = $('signalsCard');
+  if (card) {
+    card.addEventListener('click', openSignalsModal);
+    card.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        openSignalsModal();
+      }
+    });
+  }
+
+  // 手动同步：强制绕过缓存重拉 BRAIN 已提交 alpha
+  const sigRefreshBtn = $('sigRefreshBtn');
+  if (sigRefreshBtn) {
+    sigRefreshBtn.addEventListener('click', async () => {
+      if (sigRefreshBtn.disabled) return;
+      const old = sigRefreshBtn.textContent;
+      sigRefreshBtn.disabled = true;
+      sigRefreshBtn.textContent = '同步中…';
+      try {
+        await sigLoad(true);
+        toast('已同步 BRAIN 已提交 alpha', '');
+      } catch (e) {
+        toast('同步失败：' + (e.message || e), '');
+      } finally {
+        sigRefreshBtn.disabled = false;
+        sigRefreshBtn.textContent = old;
+      }
+    });
+  }
+  if (!sigModal) return;
+
+  const closeBtn = $('sigModalClose');
+  if (closeBtn) closeBtn.addEventListener('click', closeSignalsModal);
+  const backdrop = sigModal.querySelector('[data-sig-close]');
+  if (backdrop) backdrop.addEventListener('click', closeSignalsModal);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !sigModal.hidden) closeSignalsModal();
+  });
+
+  const search = $('sigSearch');
+  if (search) {
+    let timer = null;
+    search.addEventListener('input', () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        sigState.keyword = search.value || '';
+        sigState.page = 1;
+        sigRenderTable();
+      }, 160);
+    });
+  }
+  const sortSel = $('sigSort');
+  if (sortSel) {
+    sortSel.addEventListener('change', () => {
+      sigState.sort = sortSel.value;
+      sigState.page = 1;
+      sigRenderTable();
+    });
+  }
+})();
+
+// 支持 ?signals=1 直达：进页面就弹清单
+if (urlParams.get('signals')) openSignalsModal();
+
+// =====================================================================
+// Total Payment 弹窗：每日 Base Payment 折线图
+// 横向滑动（拖拽/滚轮）+ 数据点磁吸 + 顶部 odometer 滚动计数器联动
+// 数据：/api/simulator/base-payment（BRAIN /users/self/activities/base-payment）
+// =====================================================================
+const payModal = $('payModal');
+const payState = {
+  dates: [],          // 统一日期轴 [date,...]（base + submissions 并集）
+  baseMap: {},        // {date: value}
+  subMap: {},         // {date: count}
+  hoverIdx: null,
+  wrap: null,
+  cvBase: null, ctxBase: null,
+  cvSub: null, ctxSub: null,
+  dpr: 1,
+  W: 0,
+  H1: 240, H2: 150,
+  geom: null,
+};
+
+function openPayModal() {
+  if (!payModal) return;
+  payModal.hidden = false;
+  const card = payModal.querySelector('.osm-modal-card');
+  if (card) card.scrollTop = 0;
+  $('payModalSub').textContent = '正在读取 BRAIN…';
+  api('/api/simulator/base-payment').then((r) => {
+    if (!r.ok) throw new Error(r.error || '接口失败');
+    const baseRecs = r.records || [];
+    const subRecs = r.sub_records || [];
+    payState.baseMap = {};
+    baseRecs.forEach((x) => { payState.baseMap[x[0]] = Number(x[1]); });
+    payState.subMap = {};
+    subRecs.forEach((x) => { payState.subMap[x[0]] = Number(x[1]); });
+    const set = new Set();
+    baseRecs.forEach((x) => set.add(x[0]));
+    subRecs.forEach((x) => set.add(x[0]));
+    payState.dates = Array.from(set).sort();
+    if (!payState.dates.length) throw new Error('无数据');
+    renderPaySummary(r);
+    setupPayCanvases();
+    payState.hoverIdx = payState.dates.length - 1;   // 默认最新一天
+    drawPayChart();
+    drawSubChart();
+    setPayOdo(payState.hoverIdx, true);
+    $('payModalSub').textContent = `BRAIN base-payment / submissions 活动 · 共 ${payState.dates.length} 天 · ${r.currency || 'USD'}`;
+  }).catch((e) => {
+    $('payModalSub').textContent = '读取失败：' + (e.message || e);
+  });
+}
+
+function renderPaySummary(r) {
+  const f = (o) => (o && o.value != null) ? '$' + Number(o.value).toFixed(2) : '—';
+  const g = (o) => (o && o.value != null) ? Number(o.value) : '—';
+  $('paySummary').innerHTML =
+    `<span>本季 <b>${f(r.current)}</b></span>` +
+    `<span>上季 <b>${f(r.previous)}</b></span>` +
+    `<span>YTD <b>${f(r.ytd)}</b></span>` +
+    `<span>昨日 <b>${f(r.yesterday)}</b></span>` +
+    `<span class="pay-sum-total">BP 累计 <b>${f(r.total)}</b></span>` +
+    `<span class="pay-sum-total">提交累计 <b>${g(r.sub_total)}</b></span>`;
+}
+
+function setupPayCanvases() {
+  const wrap = document.querySelector('.pay-charts');
+  payState.wrap = wrap;
+  const dpr = window.devicePixelRatio || 1;
+  payState.dpr = dpr;
+  const SPACING = 44;
+  const W = Math.max(wrap.clientWidth, payState.dates.length * SPACING);
+  payState.W = W;
+  const cv1 = $('payChart'), cv2 = $('subChart');
+  [cv1, cv2].forEach((cv) => { cv.style.width = W + 'px'; });
+  cv1.style.height = payState.H1 + 'px';
+  cv1.width = Math.round(W * dpr); cv1.height = Math.round(payState.H1 * dpr);
+  cv2.style.height = payState.H2 + 'px';
+  cv2.width = Math.round(W * dpr); cv2.height = Math.round(payState.H2 * dpr);
+  payState.cvBase = cv1; payState.ctxBase = cv1.getContext('2d');
+  payState.cvSub = cv2; payState.ctxSub = cv2.getContext('2d');
+  const padL = 46, padR = 18;
+  const SP = payState.dates.length > 1 ? (W - padL - padR) / (payState.dates.length - 1) : 0;
+  payState.geom = { xOf: (i) => padL + i * SP, SP, n: payState.dates.length, padL, padR };
+  wrap.scrollLeft = Math.max(0, W - wrap.clientWidth);  // 默认定位到最新一天
+}
+
+function drawPayChart() {
+  const cv = payState.cvBase; if (!cv) return;
+  const ctx = payState.ctxBase; const dpr = payState.dpr;
+  const W = payState.W, H = payState.H1;
+  const g = payState.geom;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  const padT = 16, padB = 26;
+  const plotW = W - g.padL - g.padR, plotH = H - padT - padB;
+  const vals = payState.dates.map((d) => payState.baseMap[d]).filter((v) => v != null);
+  if (!vals.length) return;
+  // 固定刻度标尺：每格 = stepAmt 美元（当前金额小，stepAmt=$0.5），格子高度即可读出金额
+  const dataMax = Math.max.apply(null, vals);
+  const stepAmt = (() => { let s = 0.5; while (dataMax / s > 8) s *= 2; return s; })();
+  const vmax = Math.max(stepAmt, Math.ceil(dataMax / stepAmt) * stepAmt), vmin = 0;
+  const yOf = (v) => padT + plotH - ((v - vmin) / (vmax - vmin)) * plotH;
+  g.yBase = yOf;
+  // 网格
+  ctx.font = '13px "IBM Plex Sans", sans-serif'; ctx.textBaseline = 'middle';
+  const nSteps = Math.round(vmax / stepAmt);
+  for (let k = 0; k <= nSteps; k++) {
+    const v = k * stepAmt; const y = yOf(v);
+    ctx.strokeStyle = k === 0 ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.07)';
+    ctx.beginPath(); ctx.moveTo(g.padL, y); ctx.lineTo(W - g.padR, y); ctx.stroke();
+    ctx.fillStyle = 'rgba(200,214,235,0.65)'; ctx.textAlign = 'right';
+    ctx.fillText('$' + v.toFixed(stepAmt >= 1 ? 0 : 1), g.padL - 8, y);
+  }
+  // 面积 + 折线（仅 baseMap 有值点）
+  const pts = [];
+  payState.dates.forEach((d, i) => { if (payState.baseMap[d] != null) pts.push([i, payState.baseMap[d]]); });
+  if (pts.length > 1) {
+    const grad = ctx.createLinearGradient(0, padT, 0, padT + plotH);
+    grad.addColorStop(0, 'rgba(34,211,238,0.28)');
+    grad.addColorStop(1, 'rgba(34,211,238,0)');
+    ctx.beginPath(); ctx.moveTo(g.xOf(pts[0][0]), yOf(pts[0][1]));
+    pts.forEach((p) => ctx.lineTo(g.xOf(p[0]), yOf(p[1])));
+    ctx.lineTo(g.xOf(pts[pts.length - 1][0]), padT + plotH);
+    ctx.lineTo(g.xOf(pts[0][0]), padT + plotH); ctx.closePath();
+    ctx.fillStyle = grad; ctx.fill();
+    ctx.strokeStyle = '#22d3ee'; ctx.lineWidth = 2; ctx.lineJoin = 'round';
+    ctx.beginPath();
+    pts.forEach((p, i) => { const x = g.xOf(p[0]), y = yOf(p[1]); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+    ctx.stroke();
+  }
+  // 数据点
+  payState.dates.forEach((d, i) => {
+    if (payState.baseMap[d] == null) return;
+    const x = g.xOf(i), y = yOf(payState.baseMap[d]);
+    const hot = i === payState.hoverIdx;
+    ctx.beginPath(); ctx.arc(x, y, hot ? 5.5 : 2.4, 0, Math.PI * 2);
+    ctx.fillStyle = hot ? '#fbbf24' : '#22d3ee'; ctx.fill();
+    if (hot) {
+      ctx.strokeStyle = 'rgba(251,191,36,0.9)'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(x, y, 9, 0, Math.PI * 2); ctx.stroke();
+    }
+  });
+  drawHoverMark(ctx, g, W, H, padT, padB, plotH);
+}
+
+function drawSubChart() {
+  const cv = payState.cvSub; if (!cv) return;
+  const ctx = payState.ctxSub; const dpr = payState.dpr;
+  const W = payState.W, H = payState.H2;
+  const g = payState.geom;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  const padT = 14, padB = 26;
+  const plotW = W - g.padL - g.padR, plotH = H - padT - padB;
+  // 固定 5 格：普通 alpha 一天最多 4 个 + super alpha 一天最多 1 个
+  const vmax = 5, vmin = 0;
+  const yOf = (v) => padT + plotH - ((v - vmin) / (vmax - vmin)) * plotH;
+  // 网格（5 格，每格 = 1 个 alpha）
+  ctx.font = '13px "IBM Plex Sans", sans-serif'; ctx.textBaseline = 'middle';
+  for (let k = 0; k <= 5; k++) {
+    const v = k; const y = yOf(v);
+    ctx.strokeStyle = k === 0 ? 'rgba(255,255,255,0.14)' : 'rgba(255,255,255,0.07)';
+    ctx.beginPath(); ctx.moveTo(g.padL, y); ctx.lineTo(W - g.padR, y); ctx.stroke();
+    ctx.fillStyle = 'rgba(200,214,235,0.65)'; ctx.textAlign = 'right';
+    ctx.fillText(String(v), g.padL - 8, y);
+  }
+  // 柱状（按当日提交数，一格一个）
+  const bw = Math.max(3, g.SP * 0.62);
+  payState.dates.forEach((d, i) => {
+    const v = Math.min(payState.subMap[d] || 0, vmax);
+    const x = g.xOf(i) - bw / 2, y = yOf(v);
+    const hot = i === payState.hoverIdx;
+    ctx.fillStyle = hot ? '#fbbf24' : 'rgba(72,184,224,0.82)';
+    ctx.fillRect(x, y, bw, padT + plotH - y);
+  });
+  drawHoverMark(ctx, g, W, H, padT, padB, plotH);
+}
+
+function drawHoverMark(ctx, g, W, H, padT, padB, plotH) {
+  if (payState.hoverIdx == null) return;
+  const i = payState.hoverIdx, x = g.xOf(i);
+  ctx.strokeStyle = 'rgba(251,191,36,0.35)'; ctx.setLineDash([4, 4]); ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, H - padB); ctx.stroke();
+  ctx.setLineDash([]);
+  const date = payState.dates[i];
+  const label = date + (payState.baseMap[date] != null ? '  $' + payState.baseMap[date].toFixed(2) : '');
+  ctx.font = '14px "IBM Plex Sans", sans-serif';
+  const tw = ctx.measureText(label).width + 18;
+  let tx = x - tw / 2; tx = Math.max(g.padL, Math.min(W - g.padR - tw, tx));
+  const ty = padT;
+  ctx.fillStyle = 'rgba(15,23,33,0.94)'; roundRect(ctx, tx, ty, tw, 24, 6); ctx.fill();
+  ctx.fillStyle = '#fbbf24'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  ctx.fillText(label, tx + 9, ty + 12);
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+function xToIdx(x) {
+  const g = payState.geom;
+  if (!g || g.SP === 0) return null;
+  const i = Math.round((x - g.padL) / g.SP);
+  return (i >= 0 && i < g.n) ? i : null;
+}
+
+// odometer：数字滚动计数器（easeOutCubic 补间，支持小数/整数）
+function animateNum(el, from, to, instant, dec) {
+  if (instant) {
+    el.textContent = dec ? to.toFixed(dec) : String(Math.round(to));
+    el.dataset.v = dec ? to : Math.round(to);
+    return;
+  }
+  if (el._anim) cancelAnimationFrame(el._anim);
+  const t0 = performance.now();
+  const dur = 450;
+  const step = (now) => {
+    const k = Math.min(1, (now - t0) / dur);
+    const e = 1 - Math.pow(1 - k, 3);
+    const v = from + (to - from) * e;
+    el.textContent = dec ? v.toFixed(dec) : String(Math.round(v));
+    if (k < 1) el._anim = requestAnimationFrame(step);
+    else { el.dataset.v = dec ? to : Math.round(to); }
+  };
+  el._anim = requestAnimationFrame(step);
+}
+
+function setPayOdo(idx, instant) {
+  const date = payState.dates[idx];
+  if (!date) return;
+  $('payOdoDate').textContent = date;
+  const baseEl = $('payOdoVal'), subEl = $('payOdoSub');
+  const baseTo = payState.baseMap[date];
+  const subTo = payState.subMap[date] || 0;
+  if (baseTo == null) { baseEl.textContent = '—'; baseEl.dataset.v = ''; }
+  else animateNum(baseEl, parseFloat(baseEl.dataset.v || '0'), baseTo, instant, 2);
+  animateNum(subEl, parseInt(subEl.dataset.v || '0', 10), subTo, instant, 0);
+}
+
+function bindPayInteractions() {
+  // canvas 元素常驻 DOM，直接按 id 取，避免 cvBase/cvSub 在绑定时尚为 null 而导致交互失效
+  const cv1 = $('payChart'), cv2 = $('subChart');
+  const wrap = document.querySelector('.pay-charts');
+  if (!wrap) return;
+  // 横向滚轮（绑一次即可）
+  wrap.addEventListener('wheel', (e) => {
+    if (e.deltaY !== 0) { wrap.scrollLeft += e.deltaY; e.preventDefault(); }
+  }, { passive: false });
+  [cv1, cv2].forEach((cv) => {
+    if (!cv) return;
+    let dragging = false, dragX = 0, scroll0 = 0;
+    cv.addEventListener('mousedown', (e) => {
+      dragging = true; dragX = e.clientX; scroll0 = wrap.scrollLeft;
+      cv.style.cursor = 'grabbing';
+    });
+    cv.addEventListener('mousemove', (e) => {
+      if (dragging) { wrap.scrollLeft = scroll0 - (e.clientX - dragX); return; }
+      const rect = cv.getBoundingClientRect();
+      const idx = xToIdx(e.clientX - rect.left);
+      if (idx != null && idx !== payState.hoverIdx) {
+        payState.hoverIdx = idx;
+        drawPayChart(); drawSubChart(); setPayOdo(idx);
+      }
+    });
+  });
+  window.addEventListener('mouseup', () => {
+    [cv1, cv2].forEach((cv) => { if (cv) cv.style.cursor = 'default'; });
+  });
+}
+
+(function bindPayModal() {
+  if (!payModal) return;
+  const card = $('totalPaymentCard');
+  if (card) {
+    card.addEventListener('click', openPayModal);
+    card.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openPayModal(); }
+    });
+  }
+  const closeBtn = $('payModalClose');
+  if (closeBtn) closeBtn.addEventListener('click', () => { payModal.hidden = true; });
+  const backdrop = payModal.querySelector('[data-pay-close]');
+  if (backdrop) backdrop.addEventListener('click', () => { payModal.hidden = true; });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !payModal.hidden) payModal.hidden = true;
+  });
+  // 图表交互只绑定一次（canvas 元素常驻 DOM）
+  bindPayInteractions();
+})();
+
+// 支持 ?pay=1 直达
+if (urlParams.get('pay')) openPayModal();

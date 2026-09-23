@@ -65,20 +65,32 @@ def expression_key(expression: str, settings: dict) -> str:
     这样"同一表达式换中性化/decay/region 重新回测"不会被误判为重复。
     """
     payload = json.dumps(
-        {
-            "expr": expression,
-            "region": settings.get("region"),
-            "universe": settings.get("universe"),
-            "delay": settings.get("delay"),
-            "decay": settings.get("decay"),
-            "neutralization": settings.get("neutralization"),
-            "truncation": settings.get("truncation"),
-            "pasteurization": settings.get("pasteurization"),
-        },
+        _expression_key_data(expression, settings),
         ensure_ascii=False,
         sort_keys=True,
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _expression_key_data(expression: str, settings: dict) -> dict:
+    """expression_key 的哈希输入（拆出来便于单测与复用）。"""
+    data = {
+        "expr": expression,
+        "region": settings.get("region"),
+        "universe": settings.get("universe"),
+        "delay": settings.get("delay"),
+        "decay": settings.get("decay"),
+        "neutralization": settings.get("neutralization"),
+        "truncation": settings.get("truncation"),
+        "pasteurization": settings.get("pasteurization"),
+    }
+    # v82 Quick Simulate（平台 260921 上线）：QUICK 与 FULL 必须是不同的键，
+    # 否则「QUICK 初筛 → FULL 复验」第二步会被当重复跳过（漏斗断链）。
+    # 只在 QUICK 时追加该字段：FULL / 未指定时哈希输入与历史版本逐字节一致，
+    # 全库存量 expr_key 不漂移，既有去重行为零变化。
+    if settings.get("simulationMode") == "QUICK":
+        data["simulationMode"] = "QUICK"
+    return data
 
 
 class StorageError(Exception):
@@ -157,7 +169,13 @@ class Storage:
         ppa_corr_top5 TEXT,
         max_corr REAL,              -- max(|Self_max|, |PPA_max|, |Prod_PC|)
         max_corr_source TEXT,       -- 'self' / 'ppa' / 'prod'
-        corr_computed_at TEXT
+        corr_computed_at TEXT,
+        -- v82+：SUPER（SuperAlpha）专属：类型 / 选择与组合表达式 / 去重指纹
+        -- （SUPER 不写 simulations 表，去重指纹落在这里，见 completed_super_keys）
+        type TEXT,
+        selection TEXT,
+        combo TEXT,
+        expr_key TEXT
     );
 
     CREATE INDEX IF NOT EXISTS idx_alpha_sharpe ON alphas(sharpe);
@@ -168,6 +186,7 @@ class Storage:
         dataset_id TEXT,
         region TEXT,
         expression_count INTEGER DEFAULT 0,
+        sim_mode TEXT NOT NULL DEFAULT 'FULL',  -- v82: QUICK(初筛)/FULL(完整)，旧库由 _migrate 补列
         status TEXT NOT NULL DEFAULT 'pending',  -- pending/running/completed/failed
         note TEXT,
         created_at TEXT NOT NULL,
@@ -319,6 +338,29 @@ class Storage:
         # max_corr 索引（投稿前自检常用排序）
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_alpha_max_corr ON alphas(max_corr)"
+        )
+        # v82：Quick Simulate 批次模式列（旧库迁移，幂等）。
+        # 历史批次无此列 → 补列后按 DEFAULT 全部落为 FULL，语义与旧行为一致。
+        batch_cols = {
+            r[1] for r in self._conn.execute("PRAGMA table_info(ai_batches)")
+        }
+        if "sim_mode" not in batch_cols:
+            self._conn.execute(
+                "ALTER TABLE ai_batches ADD COLUMN sim_mode TEXT NOT NULL DEFAULT 'FULL'"
+            )
+        # v82：SUPER（SuperAlpha）专属列（旧库迁移，幂等）。
+        # REGULAR alpha 这些列保持 NULL —— 普通去重仍只认 simulations.expr_key，
+        # SUPER 去重指纹落在 alphas.expr_key（见 completed_super_keys）。
+        for col, ddl in {
+            "type": "ALTER TABLE alphas ADD COLUMN type TEXT",
+            "selection": "ALTER TABLE alphas ADD COLUMN selection TEXT",
+            "combo": "ALTER TABLE alphas ADD COLUMN combo TEXT",
+            "expr_key": "ALTER TABLE alphas ADD COLUMN expr_key TEXT",
+        }.items():
+            if col not in alpha_cols:
+                self._conn.execute(ddl)
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_alpha_expr_key ON alphas(expr_key)"
         )
         # submissions / task_runs 补列保护：SCHEMA 里的索引依赖这些列，
         # 老库缺列时 executescript 建索引会抛 no such column 导致启动崩溃
@@ -481,6 +523,69 @@ class Storage:
                    WHERE status='completed' AND expr_key IS NOT NULL"""
             ).fetchall()
         return {r["expr_key"] for r in rows}
+
+    def completed_super_keys(self) -> set[str]:
+        """SUPER 批次去重指纹集合（alphas.expr_key）。
+
+        SUPER 不写 simulations 表（qianxun_resume 会把那里的行当 regular 重建），
+        所以去重指纹落在 alphas 上，由 super_channel 回填时 mark_super_alpha 写入。
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                """SELECT DISTINCT expr_key FROM alphas
+                   WHERE expr_key IS NOT NULL AND expr_key != ''"""
+            ).fetchall()
+        return {r["expr_key"] for r in rows}
+
+    def mark_super_alpha(
+        self,
+        alpha_id: str,
+        *,
+        selection: str,
+        combo: str,
+        expr_key: str,
+        expression: str | None = None,
+    ) -> None:
+        """SUPER 回填后补写：type / selection / combo / expr_key。
+
+        expression 原则上取 selection（SUPER 没有 regular.code，extract 出来是空串，
+        对账展示需要点东西）；若上游已写入非空 expression 则保留不覆盖。
+        """
+        if not alpha_id:
+            return
+        expr = expression if expression is not None else selection
+        with self._lock:
+            self._conn.execute(
+                """UPDATE alphas SET
+                       type='SUPER',
+                       expression=COALESCE(NULLIF(expression, ''), ?),
+                       selection=?, combo=?, expr_key=?
+                   WHERE alpha_id=?""",
+                (expr, selection, combo, expr_key, alpha_id),
+            )
+            self._conn.commit()
+
+    def mark_ra_alpha(
+        self,
+        alpha_id: str,
+        *,
+        expression: str = "",
+        expr_key: str = "",
+    ) -> None:
+        """RA Child 回填后补写：type='RA' + expr_key；expression 为空时用
+        Parent 的表达式兜底（Child 详情的 regular 可能为空）。"""
+        if not alpha_id:
+            return
+        with self._lock:
+            self._conn.execute(
+                """UPDATE alphas SET
+                       type='RA',
+                       expression=COALESCE(NULLIF(expression, ''), ?),
+                       expr_key=COALESCE(expr_key, ?)
+                   WHERE alpha_id=?""",
+                (expression, expr_key, alpha_id),
+            )
+            self._conn.commit()
 
     def count_completed_by_key(self, expr_key: str) -> int:
         """某指纹已成功回测的次数（调试/展示用）。"""
@@ -943,15 +1048,19 @@ class Storage:
         region: str = "",
         expression_count: int = 0,
         note: str = "",
+        sim_mode: str = "FULL",
     ) -> None:
         now = datetime.now(timezone.utc).isoformat()
+        if str(sim_mode).upper() not in ("QUICK", "FULL"):
+            sim_mode = "FULL"
         with self._lock:
             self._conn.execute(
                 """INSERT INTO ai_batches
                    (batch_no, producer, dataset_id, region, expression_count,
-                    status, note, created_at, updated_at)
-                   VALUES (?,?,?,?,?, 'pending', ?, ?, ?)""",
-                (batch_no, producer, dataset_id, region, expression_count, note, now, now),
+                    sim_mode, status, note, created_at, updated_at)
+                   VALUES (?,?,?,?,?, ?, 'pending', ?, ?, ?)""",
+                (batch_no, producer, dataset_id, region, expression_count,
+                 str(sim_mode).upper(), note, now, now),
             )
             self._conn.commit()
 

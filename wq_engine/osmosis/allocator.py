@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import math
 import re
+import statistics
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable
 
@@ -70,6 +71,7 @@ class OsmosisConfig:
     fetch_yearly_stats: bool = False
     fetch_pnl_for_diversity: bool = False
     fetch_external_correlations: bool = False
+    fetch_alpha_details_for_os: bool = False
 
     # 写平台相关（allocate 时才用）
     clear_existing_first: bool = True
@@ -239,6 +241,159 @@ def is_compensated_alpha(record: dict[str, Any]) -> bool:
     return True
 
 
+# ---------------------------------------------------------------------------
+# 真实数据增强（默认关闭，吸收自 Step6 论坛版；开启后打分/去相关更贴近真实表现）
+# ---------------------------------------------------------------------------
+ENRICH_LIMIT = 200  # 候选超过此数时只对 top 分重算，控制 API 调用量
+
+
+def parse_year_score(yearly_stats: Any) -> float:
+    """从 yearly-stats records 合成 0~1 的年度稳定性分（移植自 Step6）。
+
+    组件：近 4 期夏普均值、正收益比例、波动（越低越好）、趋势，
+    各在样本内 min/max 归一后加权：0.45/0.25/0.15/0.15。
+    """
+    if not yearly_stats or not isinstance(yearly_stats, list):
+        return 0.50
+    sharpes, pos_ratios, vols, trends = [], [], [], []
+    for rec in yearly_stats:
+        if not isinstance(rec, dict):
+            continue
+        s = to_float(rec.get("sharpe") or rec.get("sharpeRatio"))
+        if not math.isnan(s):
+            sharpes.append(s)
+        pos = to_float(rec.get("positiveProportion") or rec.get("positiveReturnsProportion"))
+        if not math.isnan(pos):
+            pos_ratios.append(pos)
+        vol = to_float(rec.get("volatility") or rec.get("vol"))
+        if not math.isnan(vol):
+            vols.append(vol)
+        tr = to_float(rec.get("trend") or rec.get("returnTrend"))
+        if not math.isnan(tr):
+            trends.append(tr)
+    if not sharpes or not pos_ratios:
+        return 0.50
+    mean_sharpe = statistics.mean(sharpes)
+    mean_pos = statistics.mean(pos_ratios)
+    mean_vol = statistics.mean(vols) if vols else 0.0
+    mean_trend = statistics.mean(trends) if trends else 0.0
+
+    s_min, s_max = min(sharpes), max(sharpes)
+    norm_sharpe = (mean_sharpe - s_min) / (s_max - s_min) if s_max > s_min else 0.5
+    p_min, p_max = min(pos_ratios), max(pos_ratios)
+    norm_pos = (mean_pos - p_min) / (p_max - p_min) if p_max > p_min else 0.5
+    if vols:
+        v_min, v_max = min(vols), max(vols)
+        norm_vol = 1.0 - (mean_vol - v_min) / (v_max - v_min) if v_max > v_min else 0.5
+    else:
+        norm_vol = 0.5
+    if trends:
+        t_min, t_max = min(trends), max(trends)
+        norm_trend = (mean_trend - t_min) / (t_max - t_min) if t_max > t_min else 0.5
+    else:
+        norm_trend = 0.5
+
+    score = 0.45 * norm_sharpe + 0.25 * norm_pos + 0.15 * norm_vol + 0.15 * norm_trend
+    return max(0.0, min(1.0, score))
+
+
+def _pnl_to_series(pnl_records: Any) -> "pd.Series | None":
+    """把 pnl records（[{date, pnl}]）转成 pd.Series；不足 8 点返回 None。"""
+    if not pnl_records or not isinstance(pnl_records, list):
+        return None
+    dates, vals = [], []
+    for r in pnl_records:
+        if not isinstance(r, dict):
+            continue
+        d = r.get("date") or r.get("Date")
+        v = r.get("pnl") or r.get("Pnl") or r.get("pnlValue")
+        if d is None or v is None:
+            continue
+        try:
+            dates.append(str(d))
+            vals.append(float(v))
+        except (TypeError, ValueError):
+            continue
+    if len(vals) < 8:
+        return None
+    return pd.Series(vals, index=dates)
+
+
+def _fetch_yearly_stats(client: Any, alpha_id: str, limit: int = 2000) -> list:
+    """拉平台 yearly-stats recordset；失败/空返回 []。"""
+    try:
+        resp = client._request_with_retry(
+            "GET", f"/alphas/{alpha_id}/yearly-stats",
+            params={"limit": limit},
+            op_name=f"yearly_stats[{alpha_id}]",
+        )
+        if resp.status_code >= 400 or not resp.text.strip():
+            return []
+        data = resp.json()
+        records = data.get("records", []) if isinstance(data, dict) else []
+        if isinstance(records, list) and records and isinstance(records[0], list):
+            props = [p.get("name") for p in (data.get("schema") or {}).get("properties") or []]
+            return [dict(zip(props, r)) for r in records]
+        return records if isinstance(records, list) else []
+    except Exception as e:
+        logger.warning("yearly-stats 拉取失败 alpha={}：{}", alpha_id, e)
+        return []
+
+
+def _merge_into_raw(raw: dict, detail: dict) -> dict:
+    """把单 alpha detail 里更全的块（os/checks/self/prod corr 等）合并回 raw。"""
+    merged = dict(raw)
+    for key in ("os", "is", "settings", "checks", "selfCorrelation", "prodCorrelation",
+                "regular", "combo", "selection"):
+        if key in detail and detail[key] is not None:
+            merged[key] = detail[key]
+    return merged
+
+
+def enrich_rows_with_details(
+    client: Any, df: pd.DataFrame, config: "OsmosisConfig",
+) -> pd.DataFrame:
+    """按开关补拉真实数据并重算行（默认关闭，不调用则行为不变）。
+
+    仅对通过硬过滤的候选补拉；候选超过 ENRICH_LIMIT 时只重算 top 分。
+    补到 raw 的 _yearly_stats / _pnl，再由 flatten_alpha 重新生成行。
+    """
+    if df.empty:
+        return df
+    work = df
+    if len(df) > ENRICH_LIMIT:
+        work = df.sort_values("base_quality_score", ascending=False).head(ENRICH_LIMIT).copy()
+
+    rebuilt: list[dict] = []
+    for _, row in work.iterrows():
+        alpha_id = str(row.get("alpha_id") or "")
+        if not alpha_id:
+            continue
+        raw = dict(row.get("raw") or {})
+        try:
+            if config.fetch_alpha_details_for_os:
+                detail = client.get_alpha_details(alpha_id)
+                if isinstance(detail, dict):
+                    raw = _merge_into_raw(raw, detail)
+            if config.fetch_yearly_stats:
+                raw["_yearly_stats"] = _fetch_yearly_stats(client, alpha_id)
+            if config.fetch_pnl_for_diversity:
+                raw["_pnl"] = client.get_alpha_pnl(alpha_id)
+        except Exception as e:
+            logger.warning("enrich 失败 alpha={}：{}", alpha_id, e)
+        row_dict = flatten_alpha(raw, config.region, config.delay)
+        # 保留原 compensated 判定，避免 enrich 重判把已确认可写的变 non-compensated
+        row_dict["compensated"] = row.get("compensated")
+        rebuilt.append(row_dict)
+
+    if not rebuilt:
+        return df
+    rebuilt_df = pd.DataFrame(rebuilt).set_index("alpha_id")
+    out = df.set_index("alpha_id")
+    out.update(rebuilt_df)
+    return out.reset_index()
+
+
 def flatten_alpha(record: dict[str, Any], region: str, delay: int) -> dict[str, Any]:
     """把 BRAIN alpha 记录拍平为 DataFrame 行。"""
     settings = record.get("settings") or {}
@@ -287,8 +442,8 @@ def flatten_alpha(record: dict[str, Any], region: str, delay: int) -> dict[str, 
         "decay": settings.get("decay"),
         "truncation": settings.get("truncation"),
         "code_signature": alpha_signature(record),
-        "pnl_series": None,
-        "year_score": 0.50,
+        "pnl_series": _pnl_to_series(record.get("_pnl")) if record.get("_pnl") else None,
+        "year_score": parse_year_score(record.get("_yearly_stats")) if record.get("_yearly_stats") else 0.50,
         "raw": record,
     }
 
@@ -1058,6 +1213,12 @@ def build_allocation_plan(
 
     if progress_cb:
         progress_cb("candidates", len(all_df), len(eligible), 0, 0)
+
+    # 真实数据增强（默认关闭）：补拉 yearly-stats / pnl / OS detail 后重算打分与去相关
+    if config.fetch_yearly_stats or config.fetch_pnl_for_diversity or config.fetch_alpha_details_for_os:
+        eligible = enrich_rows_with_details(client, eligible, config)
+        eligible = apply_hard_filters(eligible, config)
+        eligible = add_base_scores(eligible)
 
     # 真实相关性（可选，慢）：对每个通过硬过滤的 alpha 调平台 correlations/self
     correlation_lookup: dict[str, dict[str, float]] = {}

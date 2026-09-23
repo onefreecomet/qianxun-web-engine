@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import sys
 import threading
 import time
@@ -26,17 +27,33 @@ from loguru import logger  # noqa: E402  （原先漏 import，导致 except 分
 # 让 web server 既能从项目根（python wq_web/server.py）也能从 -m（python -m wq_web.server）跑
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect  # noqa: E402
-from fastapi.responses import HTMLResponse  # noqa: E402
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 from fastapi.templating import Jinja2Templates  # noqa: E402
 
+import workdaddy_proxy as _wd  # noqa: E402  积分签到：WorkDaddy 本地服务代理
+
 from wq_engine.api.client import AuthError  # noqa: E402
-from wq_engine.mcp_server import _client, _latest_db, _normalize_settings  # noqa: E402
+from wq_engine.arc import ARC_DIR, ArcRunner, build_inventory, fetch_alphas_by_ids  # noqa: E402
+from wq_engine.mcp_server import _client, _latest_db, _normalize_settings, _sim_mode_of  # noqa: E402
 from wq_engine.osmosis import OsmosisConfig, build_allocation_plan  # noqa: E402
+from wq_engine.osmosis.allocator import allocate_with_caps, rank_decay_weights, to_float  # noqa: E402
 from wq_engine.scheduler.runner import BatchScheduler  # noqa: E402
 from wq_engine.storage.database import Storage, expression_key  # noqa: E402
+from wq_engine.scheduler.super_channel import (  # noqa: E402
+    is_super_batch,
+    submit_super_batch,
+    super_todo,
+)
+from wq_engine.scheduler.ra_common import (  # noqa: E402  v83 RA 原生
+    is_ra_batch,
+    ra_backfill_one,
+    ra_settings,
+    row_is_ra,
+)
 
 
 # ---------------- 应用初始化 ----------------
@@ -51,6 +68,9 @@ templates = Jinja2Templates(directory=str(WEB_DIR / "templates"))
 # 避免每次请求都 new 连接 + executescript(SCHEMA) 去抢 SQLite 写锁（WAL 下仍会排队）。
 _storage_cache: dict[str, Storage] = {}
 _storage_cache_lock = threading.Lock()
+
+# 积分签到：账号 uid 白名单正则（同时挡住路径穿越）
+_UID_RE = re.compile(r"[A-Za-z0-9_-]{1,128}")
 
 
 def _storage() -> Storage:
@@ -245,6 +265,8 @@ def _static_version() -> str:
             WEB_DIR / "static" / "style.css",
             WEB_DIR / "static" / "simulator.js",
             WEB_DIR / "static" / "simulator.css",
+            WEB_DIR / "static" / "credits.js",
+            WEB_DIR / "static" / "credits.css",
         ]
         mtimes = [f.stat().st_mtime for f in files if f.exists()]
         return str(int(max(mtimes))) if mtimes else "1"
@@ -278,6 +300,93 @@ async def simulator(request: Request) -> HTMLResponse:
             "static_v": _static_version(),
         },
     )
+
+
+@app.get("/credits", response_class=HTMLResponse)
+async def credits(request: Request) -> HTMLResponse:
+    """积分签到独立页面：多账号一键领取当天积分 + 积分明细/过期时间。
+
+    数据经本机 WorkDaddy 客户端（daemon loopback API）中转，详见 workdaddy_proxy。
+    """
+    return templates.TemplateResponse(
+        request,
+        "credits.html",
+        context={
+            "version": "v81 web alpha",
+            "static_v": _static_version(),
+        },
+    )
+
+
+@app.get("/xiaogongju", response_class=RedirectResponse, include_in_schema=False)
+async def xiaogongju_legacy() -> RedirectResponse:
+    """旧路径重定向：改名前的书签 / 已打开的标签页不至于 404。"""
+    return RedirectResponse(url="/credits", status_code=301)
+
+
+# ---------------- REST: 积分签到（账号 / 积分 / 签到） ----------------
+
+
+@app.get("/api/xgj/health")
+async def xgj_health() -> Any:
+    """诊断 WorkDaddy 本地服务可达性。未连接也返回 200，由前端展示提示。"""
+    return _wd.health()
+
+
+@app.get("/api/xgj/accounts")
+async def xgj_accounts() -> Any:
+    """账号列表（含签到状态与今日用量）。"""
+    try:
+        return _wd.fetch_accounts()
+    except _wd.DaemonError as e:
+        return JSONResponse({"ok": False, "error": e.message}, status_code=e.status)
+
+
+@app.post("/api/xgj/credits")
+async def xgj_credits(request: Request) -> Any:
+    """单账号积分明细（积分段 + 过期时间）。"""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    uid = str((body or {}).get("uid") or "").strip()
+    if not uid:
+        return JSONResponse({"ok": False, "error": "缺少 uid"}, status_code=400)
+    if not _UID_RE.fullmatch(uid):
+        return JSONResponse({"ok": False, "error": "uid 格式无效"}, status_code=400)
+    try:
+        return _wd.fetch_credit_view(uid)
+    except _wd.DaemonError as e:
+        return JSONResponse({"ok": False, "uid": uid, "error": e.message}, status_code=e.status)
+
+
+@app.post("/api/xgj/credits-batch")
+async def xgj_credits_batch(request: Request) -> Any:
+    """批量积分明细：一次请求并发拉完所有账号，避免前端 N 次串行往返。"""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    raw = (body or {}).get("uids") or []
+    if not isinstance(raw, list):
+        return JSONResponse({"ok": False, "error": "uids 必须是数组"}, status_code=400)
+    uids = [str(u).strip() for u in raw[:64]]
+    bad = [u for u in uids if u and not _UID_RE.fullmatch(u)]
+    if bad:
+        return JSONResponse({"ok": False, "error": "uid 格式无效"}, status_code=400)
+    try:
+        return _wd.fetch_credit_views(uids)
+    except _wd.DaemonError as e:
+        return JSONResponse({"ok": False, "error": e.message}, status_code=e.status)
+
+
+@app.post("/api/xgj/claim")
+async def xgj_claim() -> Any:
+    """一键领取：触发 WorkDaddy 的每日签到任务（内部全账号遍历 + 幂等跳过）。"""
+    try:
+        return _wd.trigger_claim()
+    except _wd.DaemonError as e:
+        return JSONResponse({"ok": False, "error": e.message}, status_code=e.status)
 
 
 # ---------------- REST: 批次 ----------------
@@ -338,6 +447,23 @@ async def list_batches(limit: int = 50) -> dict:
                 r["sim_done"] = scompleted + sfailed
         except Exception:
             pass
+    # SUPER 批次不写 simulations 表（super_channel 独立通道）→ sim 统计为 0 时
+    # 用 alphas 回填数兜底，批次列表进度条才不会永远 0/N（260923）
+    for r in rows:
+        if not r.get("sim_total") and (r.get("expression_count") or 0) > 0:
+            try:
+                with st._lock:
+                    arow = st._conn.execute(
+                        "SELECT COUNT(*) c FROM alphas WHERE batch_no=?",
+                        (r["batch_no"],),
+                    ).fetchone()
+                done_a = int(arow["c"]) if arow else 0
+                r["sim_total"] = int(r.get("expression_count") or 0)
+                r["sim_completed"] = done_a
+                r["sim_failed"] = 0
+                r["sim_done"] = done_a
+            except Exception:
+                pass
     return {"ok": True, "batches": [_serialize(r) for r in rows]}
 
 
@@ -372,12 +498,22 @@ async def batch_detail(batch_no: str) -> dict:
     sim_settings = {s.get("alpha_id"): s.get("settings_json") for s in sim_rows if s.get("alpha_id")}
     for a in alphas:
         a["settings_json"] = sim_settings.get(a.get("alpha_id"))
+    # v82 第三刀：详情附加 SUPER 标识 + 升级链反查（详情页漏斗「已升级」一格用）
+    is_super = any(a.get("type") == "SUPER" for a in alphas)
+    with st._lock:
+        ups = st._conn.execute(
+            "SELECT batch_no, status FROM ai_batches WHERE note LIKE ? "
+            "ORDER BY created_at DESC LIMIT 20",
+            (f"%← {batch_no}%",),
+        ).fetchall()
     return {
         "ok": True,
         "batch": _serialize(b),
         "task_run": _serialize(task_run),
         "alphas": [_serialize(a) for a in alphas],
         "simulations": [_serialize(s) for s in sim_rows],
+        "is_super": is_super,
+        "upgrades": [_serialize(dict(u)) for u in ups],
     }
 
 
@@ -392,7 +528,34 @@ async def batch_progress(batch_no: str) -> dict:
             (batch_no,),
         ).fetchone()
     if not tr:
-        return {"ok": False, "error": "no task_run", "batch_no": batch_no}
+        # SUPER 批次不写 task_runs/simulations（super_channel 独立通道）→
+        # 用 ai_batches 状态 + alphas 回填数当进度，详情页进度条才有输出；
+        # 连 ai_batch 都没有才维持原样报错
+        b = st.get_ai_batch(batch_no)
+        if not b:
+            return {"ok": False, "error": "no task_run", "batch_no": batch_no}
+        with st._lock:
+            arow = st._conn.execute(
+                "SELECT COUNT(*) c FROM alphas WHERE batch_no=?",
+                (batch_no,),
+            ).fetchone()
+        done_a = int(arow["c"]) if arow else 0
+        total = int(b.get("expression_count") or 0) or done_a
+        pct = round(min(100, done_a / total * 100), 1) if total > 0 else 0
+        return {
+            "ok": True,
+            "batch_no": batch_no,
+            "task_run_id": None,
+            "status": b.get("status"),
+            "total": total,
+            "completed": done_a,
+            "failed": 0,
+            "running": 0,
+            "pending": max(total - done_a, 0),
+            "done": done_a,
+            "pct": pct,
+            "mode": "alphas",
+        }
     t = dict(tr)
     tid = t["id"]
     with st._lock:
@@ -423,43 +586,26 @@ async def batch_progress(batch_no: str) -> dict:
     }
 
 
-@app.post("/api/batches")
-async def create_batch(req: Request) -> dict:
-    """提交 AI 批次。
+def _launch_regular_batch(
+    st,
+    settings: dict,
+    todo: list,
+    *,
+    skipped: int,
+    producer: str,
+    batch_size: int,
+    no_backfill: bool,
+    sim_mode: str,
+    note: str,
+) -> dict:
+    """常规 REGULAR 批次落地：建 task_run/ai_batch → BatchScheduler 线程跑 + 回填。
 
-    Body: {
-      "expressions": [{"expression": "...", "decay": 4}, ...],
-      "settings": {"region": "USA", "decay": 4, ...},
-      "producer": "阿法",
-      "batch_size": 8,
-      "no_backfill": false
-    }
-    并发批数 / 并发槽用全局设置（/api/concurrency），不在提交里传。
+    从 create_batch 抽出（260923 第三刀）：POST /api/batches 与升级复验
+    /api/batches/{batch_no}/upgrade 共用同一条链路，行为与原内联版逐行一致。
     """
-    body = await req.json()
-    expressions_raw = body.get("expressions", [])
-    if not expressions_raw:
-        raise HTTPException(400, "expressions 不能为空")
-    settings = _normalize_settings(body.get("settings") or {})
-    producer = body.get("producer", "阿法")
     glob = _get_concurrency()
     concurrent = glob["concurrent"]
     sim_slots = glob["sim_slots"]
-    batch_size = int(body.get("batch_size", 8))
-    no_backfill = bool(body.get("no_backfill", False))
-
-    st = _storage()
-    # 去重
-    done = st.completed_expression_keys()
-    todo = [
-        (e["expression"], e.get("decay", settings["decay"]), settings)
-        for e in expressions_raw
-        if expression_key(e["expression"], settings) not in done
-    ]
-    skipped = len(expressions_raw) - len(todo)
-    if not todo:
-        return {"ok": True, "skipped": skipped, "message": "全部表达式已回测过"}
-
     batch_no = st.next_batch_no()
     tid = st.create_task_run(
         name=f"web batch {batch_no}",
@@ -474,7 +620,8 @@ async def create_batch(req: Request) -> dict:
         dataset_id=str(settings.get("dataset_id", "")),
         region=str(settings["region"]),
         expression_count=len(todo),
-        note=f"web v81 提交（跳过 {skipped}）",
+        sim_mode=sim_mode,
+        note=note,
     )
 
     # 后台跑 BatchScheduler（同步线程），进度通过 bus.push 推到 WebSocket
@@ -504,6 +651,13 @@ async def create_batch(req: Request) -> dict:
                 sims = st.list_completed_simulations(tid)
                 for s in sims:
                     try:
+                        # v83 RA 原生：region=ALL 的 sim 回填 **Children**
+                        # （Parent 无指标不入库），REGULAR 路径逐行不变
+                        if row_is_ra(s):
+                            info = ra_backfill_one(st, client, s, batch_no)
+                            if info:
+                                backfilled += len(info["children"])
+                            continue
                         detail = client.get_alpha_details(s["alpha_id"])
                         alpha = client.extract_alpha_metrics(detail)
                         if alpha.get("alpha_id"):
@@ -551,6 +705,325 @@ async def create_batch(req: Request) -> dict:
         "submitted": len(todo),
         "skipped": skipped,
     }
+
+
+
+
+@app.post("/api/batches")
+async def create_batch(req: Request) -> dict:
+    """提交 AI 批次。
+
+    Body: {
+      "expressions": [{"expression": "...", "decay": 4}, ...],
+      "settings": {"region": "USA", "decay": 4, ...},
+      "producer": "阿法",
+      "batch_size": 8,
+      "no_backfill": false
+    }
+    并发批数 / 并发槽用全局设置（/api/concurrency），不在提交里传。
+    """
+    body = await req.json()
+    expressions_raw = body.get("expressions", [])
+    if not expressions_raw:
+        raise HTTPException(400, "expressions 不能为空")
+    # v82 Quick Simulate：simulationMode 可写在 settings 里，也可写在 body 根级
+    raw_settings = dict(body.get("settings") or {})
+    if body.get("simulationMode") is not None and raw_settings.get("simulationMode") is None:
+        raw_settings["simulationMode"] = body["simulationMode"]
+    try:
+        settings = _normalize_settings(raw_settings)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    sim_mode = _sim_mode_of(settings)
+    if sim_mode == "QUICK":
+        # QUICK 暂只支持 REGULAR（SUPER/RA × QUICK 平台未证实，与 MCP 同一条纪律）
+        has_super = any(
+            isinstance(e, dict) and ("selection" in e or "combo" in e)
+            for e in expressions_raw
+        )
+        if has_super or is_ra_batch(expressions_raw, settings):
+            raise HTTPException(
+                422,
+                "QUICK 模式暂只支持 REGULAR 批次（SUPER / RA × QUICK 平台未证实，待实测后放开）",
+            )
+    # v83 RA 原生（260923）：入口先幂等修正 settings（region=ALL 系），
+    # 保证「存进 settings_json 的 = 发给平台的」；之后 SUPER 检测 / 去重 /
+    # 启动器 / runner 全部拿到已修正 settings，payload type 由 runner 推导。
+    if is_ra_batch(expressions_raw, settings):
+        settings = ra_settings(settings)
+
+    producer = body.get("producer", "阿法")
+    glob = _get_concurrency()
+    concurrent = glob["concurrent"]
+    sim_slots = glob["sim_slots"]
+    batch_size = int(body.get("batch_size", 8))
+    no_backfill = bool(body.get("no_backfill", False))
+
+    st = _storage()
+    # ---- SUPER（SuperAlpha）独立通道（v82，260923）----
+    # web 8090 此前不支持 SA：runner 硬编码 type:REGULAR，按 e["expression"]
+    # 去重对 selection/combo 元素会 KeyError。检测到即分流到 super_channel
+    # （去重 / 预筛 / 并发 3 / 回填都在模块内）。batch_size 与 no_backfill
+    # 对 SUPER 不适用：固定单条投递、回填始终开启（去重依赖 alphas.expr_key）。
+    if is_super_batch(expressions_raw):
+        todo_super, skipped_super = super_todo(expressions_raw, settings, st)
+        if not todo_super:
+            return {"ok": True, "batch_no": None, "skipped": skipped_super,
+                    "message": "全部 SUPER 表达式已回测过"}
+        batch_no = st.next_batch_no()
+        st.create_ai_batch(
+            batch_no=batch_no,
+            producer=producer,
+            dataset_id=str(settings.get("dataset_id", "")),
+            region=str(settings["region"]),
+            expression_count=len(todo_super),
+            sim_mode=sim_mode,
+            note=f"web SUPER 批次（selection/combo，跳过 {skipped_super}）",
+        )
+        st.update_ai_batch_status(batch_no, "running")
+
+        def _run_super() -> None:
+            try:
+                res = submit_super_batch(
+                    _client(), st, todo_super, settings, batch_no,
+                    max_workers=max(1, min(3, sim_slots)),
+                    event_cb=lambda ev, payload: bus.push(
+                        ev, {"batch_no": batch_no, **payload}),
+                )
+                st.update_ai_batch_status(batch_no, "completed")
+                bus.push("batch_done", {
+                    "batch_no": batch_no,
+                    "task_run_id": None,
+                    "completed": res.get("completed", 0),
+                    "failed": res.get("failed", 0),
+                    "skipped": skipped_super,
+                    "errors": res.get("errors", []),
+                })
+            except Exception as e:
+                try:
+                    st.update_ai_batch_status(batch_no, "failed")
+                except Exception:
+                    pass
+                bus.push("batch_error", {"batch_no": batch_no, "error": str(e)})
+
+        threading.Thread(target=_run_super, daemon=True,
+                         name=f"super-{batch_no}").start()
+        return {
+            "ok": True,
+            "batch_no": batch_no,
+            "task_run_id": None,
+            "mode": "SUPER",
+            "submitted": len(todo_super),
+            "skipped": skipped_super,
+        }
+
+    # 去重
+    done = st.completed_expression_keys()
+    todo = [
+        (e["expression"], e.get("decay", settings["decay"]), settings)
+        for e in expressions_raw
+        if expression_key(e["expression"], settings) not in done
+    ]
+    skipped = len(expressions_raw) - len(todo)
+    if not todo:
+        return {"ok": True, "skipped": skipped, "message": "全部表达式已回测过"}
+
+    return _launch_regular_batch(
+        st, settings, todo,
+        skipped=skipped, producer=producer, batch_size=batch_size,
+        no_backfill=no_backfill, sim_mode=sim_mode,
+        note=f"web v81 提交（跳过 {skipped}）",
+    )
+
+# ---------------- 提交保护 + 升级复验（v82 第三刀，260923） ----------------
+
+
+def _full_backed_reason(st, alpha_id: str) -> str | None:
+    """QUICK 初筛 alpha 的提交保护：无 FULL 复验证据 → 返回拒绝原因；其余 → None。
+
+    证据（满足其一即放行）：
+    1. 同表达式在非 QUICK 批次里有回填记录（升级批产生的 alpha 行）；
+    2. simulations 有同表达式的 completed 记录且 settings 不含 QUICK
+       （升级批的 sim 行；QUICK 自己的 sim 行 settings 带 QUICK，被排除）。
+    本地查不到的 alpha（平台侧来源）不拦 —— 保护只覆盖千寻自己产出的初筛结果。
+    """
+    with st._lock:
+        row = st._conn.execute(
+            "SELECT alpha_id, expression, batch_no FROM alphas WHERE alpha_id=?",
+            (alpha_id,),
+        ).fetchone()
+    if not row:
+        return None
+    # 注意：下面每次单独持锁 —— st._lock 不可重入，在持锁状态下再调
+    # get_ai_batch（内部也要抢锁）会直接死锁（260923 踩过）
+    batch = st.get_ai_batch(row["batch_no"]) if row["batch_no"] else None
+    if not batch or str(batch.get("sim_mode") or "FULL") != "QUICK":
+        return None
+    expr = (row["expression"] or "").strip()
+    if not expr:
+        return None
+    with st._lock:
+        r1 = st._conn.execute(
+            """SELECT 1 FROM alphas a JOIN ai_batches b2 ON a.batch_no = b2.batch_no
+               WHERE a.expression = ? AND a.alpha_id != ?
+                 AND (b2.sim_mode = 'FULL' OR b2.sim_mode IS NULL)
+               LIMIT 1""",
+            (expr, alpha_id),
+        ).fetchone()
+    if r1:
+        return None
+    with st._lock:
+        r2 = st._conn.execute(
+            """SELECT 1 FROM simulations
+               WHERE expression = ? AND status = 'completed'
+                 AND settings_json NOT LIKE '%"QUICK"%'
+               LIMIT 1""",
+            (expr,),
+        ).fetchone()
+    if r2:
+        return None
+    return (
+        f"alpha {alpha_id} 来自 QUICK 初筛批次（{row['batch_no']}），"
+        "尚无同表达式的 FULL 完整回测记录；"
+        "请先在该批次点「筛选并升级 FULL」复验后再提交"
+    )
+
+
+_UPGRADE_CFG_DROP = {
+    "producer", "kind", "name", "total", "batch_no", "batch_size",
+    "max_concurrent", "max_retries", "expressions",
+}
+
+
+def _upgrade_settings_from_task(cfg: dict) -> dict:
+    """task_runs.config_json → 升级批次可用的 settings。
+
+    - 剔除 task 元数据与 simulationMode（升级恒为 FULL，绝不带 QUICK 键）；
+    - web/MCP 的 config 是 {producer, **settings} 平铺；GUI 路径 settings 嵌在
+      expressions 三元组 (expression, decay, settings) 里，做一次回退提取。
+    """
+    settings = {
+        k: v for k, v in cfg.items()
+        if k not in _UPGRADE_CFG_DROP
+        and isinstance(v, (str, int, float, bool))
+    }
+    if "region" not in settings:
+        for e in (cfg.get("expressions") or []):
+            if isinstance(e, (list, tuple)) and len(e) >= 3 \
+                    and isinstance(e[2], dict) and "region" in e[2]:
+                settings = dict(e[2])
+                break
+    settings.pop("simulationMode", None)
+    return _normalize_settings(settings)
+
+
+def _upgrade_candidates(rows: list, thresholds: dict | None,
+                        alpha_ids: list | None) -> tuple[list, int]:
+    """升级入围筛选。返回 (选中列表, 因阈值跳过数)。
+
+    - alpha_ids 模式：手选，忽略阈值；
+    - 阈值模式：默认 |sharpe| ≥ 1.0 且 fitness ≥ 1.0；
+    - 表达式为空的一律不选（不计入阈值跳过）。
+    """
+    candidates = [a for a in rows if (a.get("expression") or "").strip()]
+    if alpha_ids:
+        want = {str(x) for x in alpha_ids}
+        chosen = [a for a in candidates if a.get("alpha_id") in want]
+        return chosen, 0
+    th = thresholds or {}
+    min_abs_sharpe = float(th.get("min_abs_sharpe", 1.0))
+    min_fitness = float(th.get("min_fitness", 1.0))
+    chosen = [
+        a for a in candidates
+        if abs(a.get("sharpe") or 0.0) >= min_abs_sharpe
+        and (a.get("fitness") or 0.0) >= min_fitness
+    ]
+    return chosen, len(candidates) - len(chosen)
+
+
+@app.post("/api/batches/{batch_no}/upgrade")
+async def upgrade_batch(batch_no: str, req: Request) -> dict:
+    """QUICK 批次 → FULL 复验（升级复验）。
+
+    Body（均可选）：
+    - {"alpha_ids": ["..."]}  手选 alpha（忽略阈值）
+    - {"thresholds": {"min_abs_sharpe": 1.0, "min_fitness": 1.0}}  阈值筛选（缺省即该默认值）
+    - {"batch_size": 8}  新批次分包大小
+
+    入围表达式以 FULL 模式重新回测（settings 剔除 simulationMode），
+    走与普通批次完全相同的 _launch_regular_batch 链路；note 记录来源批次
+    「升级复验 ← {src}」，供详情页漏斗反查。
+    """
+    try:
+        body = await req.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    st = _storage()
+    src = st.get_ai_batch(batch_no)
+    if not src:
+        raise HTTPException(404, f"批次不存在：{batch_no}")
+    if str(src.get("sim_mode") or "FULL") != "QUICK":
+        raise HTTPException(
+            400,
+            "只有 QUICK 初筛批次可以升级复验（FULL / SUPER 批次本身就是完整回测）",
+        )
+    with st._lock:
+        tr = st._conn.execute(
+            "SELECT * FROM task_runs WHERE batch_no=? ORDER BY id DESC LIMIT 1",
+            (batch_no,),
+        ).fetchone()
+    if not tr:
+        raise HTTPException(400, "源批次缺少 task_run，无 settings 可复用")
+    try:
+        cfg = json.loads(tr["config_json"] or "{}")
+    except ValueError:
+        cfg = {}
+    try:
+        settings = _upgrade_settings_from_task(cfg if isinstance(cfg, dict) else {})
+    except ValueError as e:
+        raise HTTPException(422, f"源批次 settings 非法：{e}")
+
+    rows = st.list_alphas_by_batch(batch_no)
+    thresholds = body.get("thresholds") if isinstance(body.get("thresholds"), dict) else None
+    alpha_ids = body.get("alpha_ids") if isinstance(body.get("alpha_ids"), list) else None
+    try:
+        chosen, thr_skipped = _upgrade_candidates(rows, thresholds, alpha_ids)
+    except (TypeError, ValueError) as e:
+        raise HTTPException(422, f"阈值非法：{e}")
+    if not chosen:
+        return {"ok": True, "batch_no": None, "promoted": 0,
+                "skipped_threshold": thr_skipped, "skipped_dup": 0,
+                "message": "无入围表达式（调阈值或手选 alpha 后重试）"}
+
+    done = st.completed_expression_keys()
+    todo = [
+        (a["expression"], a.get("decay") or settings.get("decay", 1), settings)
+        for a in chosen
+        if expression_key(a["expression"], settings) not in done
+    ]
+    dup_skipped = len(chosen) - len(todo)
+    if not todo:
+        return {"ok": True, "batch_no": None, "promoted": 0,
+                "skipped_threshold": thr_skipped, "skipped_dup": dup_skipped,
+                "message": "入围表达式均已有 FULL 完整回测记录"}
+
+    res = _launch_regular_batch(
+        st, settings, todo,
+        skipped=thr_skipped + dup_skipped,
+        producer=src.get("producer") or "升级复验",
+        batch_size=int(body.get("batch_size") or 8),
+        no_backfill=False,
+        sim_mode="FULL",
+        note=f"升级复验 ← {batch_no}（跳过 {thr_skipped + dup_skipped}）",
+    )
+    res.update({
+        "promoted": len(todo),
+        "skipped_threshold": thr_skipped,
+        "skipped_dup": dup_skipped,
+    })
+    return res
 
 
 # ---------------- REST: Alpha 列表 ----------------
@@ -823,6 +1296,69 @@ def _brain_count_alphas_since(client, est_start_iso: str, *, submitted_only: boo
     return None
 
 
+# ---------------- Base Payment（每日 Base Payment + 汇总） ----------------
+
+_BASE_PAYMENT_CACHE: dict = {"data": None, "ts": 0.0}
+_BASE_PAYMENT_TTL = 300  # 秒；base payment 每日更新，缓存久一点避免频打接口
+
+
+def _get_base_payment() -> dict | None:
+    """拉取 BRAIN base-payment 活动（/users/self/activities/base-payment）。
+
+    返回完整 dict：total/current/previous/ytd/yesterday 汇总 + records.records
+    （[[date, value], ...] 每日记录）。失败回退旧缓存 / None。
+    """
+    import time as _t
+    cached = _BASE_PAYMENT_CACHE
+    if cached.get("data") and (_t.time() - cached.get("ts", 0)) < _BASE_PAYMENT_TTL:
+        return cached["data"]
+    try:
+        client = _client()
+        resp = client._request_with_retry(
+            "GET", "/users/self/activities/base-payment",
+            op_name="sim_base_payment",
+        )
+        if resp.status_code < 400:
+            data = resp.json()
+            cached["data"] = data
+            cached["ts"] = _t.time()
+            return data
+    except Exception:
+        pass
+    return cached.get("data")
+
+
+# 每日提交 alpha 数（/users/self/activities/submissions）
+_DAILY_SUB_CACHE: dict = {"data": None, "ts": 0.0}
+_DAILY_SUB_TTL = 300  # 秒
+
+
+def _get_daily_submissions() -> dict | None:
+    """拉取 BRAIN 每日提交 alpha 活动（/users/self/activities/submissions）。
+
+    返回完整 dict：total/current/previous/ytd/yesterday 汇总 + records.records
+    （[[date, count], ...] 每日提交数）。失败回退旧缓存 / None。
+    """
+    import time as _t
+    cached = _DAILY_SUB_CACHE
+    if cached.get("data") and (_t.time() - cached.get("ts", 0)) < _DAILY_SUB_TTL:
+        return cached["data"]
+    try:
+        client = _client()
+        resp = client._request_with_retry(
+            "GET", "/users/self/activities/submissions",
+            op_name="sim_daily_sub",
+        )
+        if resp.status_code < 400:
+            data = resp.json()
+            cached["data"] = data
+            cached["ts"] = _t.time()
+            return data
+    except Exception:
+        pass
+    return cached.get("data")
+
+
 @app.get("/api/simulator/platform-stats")
 async def simulator_platform_stats() -> dict:
     """Simulator 顶部平台指标：用户要的 4 项全部来自 BRAIN 实时。
@@ -899,6 +1435,32 @@ async def simulator_platform_stats() -> dict:
                 # 真实「今日」计数（美东日期）
                 today_simulated = _brain_count_alphas_since(client, est_start_iso, submitted_only=False)
                 today_submitted = _brain_count_alphas_since(client, est_start_iso, submitted_only=True)
+                # Pyramids Completed：官网 genius 页面的权威「金字塔完成数」口径
+                # （/users/self/consultant/summary 的 pyramidCount；
+                #  区别于 alpha 列表 pyramids 字段的去重计数）
+                pyramids_completed = None
+                try:
+                    sum_resp = client._request_with_retry(
+                        "GET", "/users/self/consultant/summary",
+                        op_name="sim_consultant_summary",
+                    )
+                    if sum_resp.status_code < 400:
+                        sum_data = sum_resp.json()
+                        _cur = (sum_data.get("performance") or {}).get("current") or {}
+                        _lb = sum_data.get("leaderboard") or {}
+                        pyramids_completed = _cur.get("pyramidCount")
+                        if pyramids_completed is None:
+                            pyramids_completed = _lb.get("pyramidCount")
+                except Exception:
+                    pyramids_completed = None
+                # Total Payment（顶部卡片）：来自 base-payment 活动的 total.value
+                total_payment = None
+                try:
+                    _bp = _get_base_payment()
+                    if _bp:
+                        total_payment = (_bp.get("total") or {}).get("value")
+                except Exception:
+                    total_payment = None
                 brain = {
                     "ok": True,
                     "osmosis_rank": lb.get("dailyOsmosisRank"),
@@ -910,6 +1472,8 @@ async def simulator_platform_stats() -> dict:
                     "mean_self_corr": lb.get("meanSelfCorrelation"),
                     "today_simulated": today_simulated,
                     "today_submitted": today_submitted,
+                    "pyramids_completed": pyramids_completed,
+                    "total_payment": total_payment,
                     "competitions": [
                         {
                             "id": c.get("id"),
@@ -949,6 +1513,8 @@ async def simulator_platform_stats() -> dict:
         if brain.get("today_simulated") is not None else local_simulated,
         "today_submitted": brain.get("today_submitted")
         if brain.get("today_submitted") is not None else local_submitted,
+        "pyramids_completed": brain.get("pyramids_completed"),
+        "total_payment": brain.get("total_payment"),
         "osmosis_rank": brain.get("osmosis_rank"),
         "vf": brain.get("vf"),
         "community": brain.get("community"),
@@ -960,6 +1526,182 @@ async def simulator_platform_stats() -> dict:
         "brain_ok": brain.get("ok", False),
         "fetched_at": now.isoformat(),
     }
+
+
+@app.get("/api/simulator/base-payment")
+async def simulator_base_payment() -> dict:
+    """Base Payment 每日明细 + 汇总（点顶部 Total Payment 卡片打开弹窗）。
+
+    Total Payment = total.value（全部累计）；
+    records.records = [[date, value], ...] 每日记录（折线图用）。
+    """
+    try:
+        bp = _get_base_payment()
+        sub = _get_daily_submissions()
+        if bp is None:
+            return {"ok": False, "error": "拉取 BRAIN base-payment 失败"}
+        return {
+            "ok": True,
+            "currency": bp.get("currency", "USD"),
+            "total": bp.get("total"),
+            "current": bp.get("current"),
+            "previous": bp.get("previous"),
+            "ytd": bp.get("ytd"),
+            "yesterday": bp.get("yesterday"),
+            "records": (bp.get("records") or {}).get("records", []),
+            "sub_total": (sub or {}).get("total"),
+            "sub_current": (sub or {}).get("current"),
+            "sub_previous": (sub or {}).get("previous"),
+            "sub_ytd": (sub or {}).get("ytd"),
+            "sub_yesterday": (sub or {}).get("yesterday"),
+            "sub_records": (sub.get("records") or {}).get("records", []) if sub else [],
+        }
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": str(e)[:200]}
+
+
+# ---- 已提交 alpha 清单（点顶部 Signals 卡片打开）----
+
+_SUBMITTED_ALPHAS_CACHE: dict = {"data": None, "ts": 0.0}
+_SUBMITTED_ALPHAS_TTL = 120  # 秒，避免弹窗反复打开时猛打接口
+
+
+def _fetch_submitted_alphas(client) -> dict:
+    """拉取全部「已提交」alpha 明细。
+
+    口径：`status != UNSUBMITTED 且 != IS_FAIL`，即已进入生产流程的 alpha
+    （ACTIVE / DECOMMISSIONED 等）。按 dateSubmitted 倒序，分页拉完。
+
+    ⚠️ 与顶部 Signals 卡片的 `submissionsCount` 口径可能不同：
+    平台侧 `submissionsCount` 是它自己算的聚合值，实测（2026-09-15）
+    账号 BL18292 为 80，而本接口能拉到 136 条。两者差异原因平台未公开，
+    故返回里同时给出两个数字，前端一并展示，不做归一化猜测。
+    """
+    base_q = (
+        "/users/self/alphas?limit=100"
+        "&order=-dateSubmitted&hidden=false"
+        "&status%21=UNSUBMITTED%1FIS_FAIL"
+    )
+    alphas: list[dict] = []
+    offset = 0
+    total_count = None
+    while offset < 2000:  # 防御性上限
+        resp = client._request_with_retry(
+            "GET", f"{base_q}&offset={offset}", op_name="sim_submitted_alphas",
+        )
+        if resp.status_code >= 400:
+            break
+        payload = resp.json()
+        if total_count is None:
+            total_count = int(payload.get("count", 0) or 0)
+        page = payload.get("results", []) or []
+        if not page:
+            break
+        alphas.extend(page)
+        if len(page) < 100:
+            break
+        offset += 100
+
+    def _region_of(a: dict) -> str:
+        s = a.get("settings") or {}
+        return str(s.get("region") or "")
+
+    def _is_metric(a: dict, key: str):
+        """IS 指标在 alpha['is'] 里（不是 regular/metrics）——实测确认。"""
+        d = a.get("is") or {}
+        return d.get(key)
+
+    def _classification_ids(a: dict) -> list[str]:
+        return [
+            c.get("id") for c in (a.get("classifications") or [])
+            if isinstance(c, dict) and c.get("id")
+        ]
+
+    items = []
+    for a in alphas:
+        s = a.get("settings") or {}
+        pyr = a.get("pyramids") or []
+        os_ = a.get("os") or {}
+        # OS 检查项：只统计已出结果的，PENDING 的忽略
+        os_checks = [
+            c.get("result") for c in (os_.get("checks") or [])
+            if isinstance(c, dict)
+        ]
+        items.append({
+            "id": a.get("id"),
+            "status": a.get("status"),
+            "type": a.get("type"),
+            "stage": a.get("stage"),
+            "dateSubmitted": a.get("dateSubmitted"),
+            "dateCreated": a.get("dateCreated"),
+            "region": str(s.get("region") or ""),
+            "universe": str(s.get("universe") or ""),
+            "delay": s.get("delay"),
+            "neutralization": s.get("neutralization"),
+            "decay": s.get("decay"),
+            "truncation": s.get("truncation"),
+            "pyramids": [p.get("name") for p in pyr if isinstance(p, dict)],
+            "pyramidMultipliers": [
+                p.get("multiplier") for p in pyr if isinstance(p, dict)
+            ],
+            "isSharpe": _is_metric(a, "sharpe"),
+            "isFitness": _is_metric(a, "fitness"),
+            "isReturns": _is_metric(a, "returns"),
+            "isTurnover": _is_metric(a, "turnover"),
+            "isDrawdown": _is_metric(a, "drawdown"),
+            "isMargin": _is_metric(a, "margin"),
+            "osISSharpeRatio": os_.get("osISSharpeRatio"),
+            "osPreCloseSharpe": os_.get("preCloseSharpeRatio"),
+            "osChecksPending": os_checks.count("PENDING") if os_checks else 0,
+            "osChecksTotal": len(os_checks),
+            "classifications": _classification_ids(a),
+            "competitions": [
+                c.get("id") for c in (a.get("competitions") or []) if isinstance(c, dict)
+            ],
+            "favorite": a.get("favorite"),
+        })
+
+    # 按区域聚合，方便前端做分组
+    by_region: dict[str, int] = {}
+    by_status: dict[str, int] = {}
+    for it in items:
+        r = it["region"] or "(未知)"
+        by_region[r] = by_region.get(r, 0) + 1
+        s = it["status"] or "(未知)"
+        by_status[s] = by_status.get(s, 0) + 1
+
+    return {
+        "count": len(items),
+        "platform_count": total_count,
+        "byRegion": by_region,
+        "byStatus": by_status,
+        "items": items,
+    }
+
+
+@app.get("/api/simulator/submitted-alphas")
+async def simulator_submitted_alphas(refresh: bool = False) -> dict:
+    """已提交 alpha 明细清单（供 Signals 卡片弹窗使用）。
+
+    带 120s 短缓存：弹窗反复开关不会猛打 BRAIN。
+    """
+    import time as _t
+    cached = _SUBMITTED_ALPHAS_CACHE
+    if (not refresh and cached.get("data")
+            and (_t.time() - cached.get("ts", 0)) < _SUBMITTED_ALPHAS_TTL):
+        return {"ok": True, "cached": True, **cached["data"]}
+
+    try:
+        client = _client()
+        data = _fetch_submitted_alphas(client)
+        cached["data"] = data
+        cached["ts"] = _t.time()
+        return {"ok": True, "cached": False, **data}
+    except Exception as e:  # noqa: BLE001
+        logger.warning("拉取已提交 alpha 清单失败: %s", e)
+        if cached.get("data"):
+            return {"ok": True, "cached": True, "stale": True, **cached["data"]}
+        return {"ok": False, "error": str(e)[:200], "items": []}
 
 
 def _compute_yearly_stats(pnl_records: list[dict]) -> list[dict]:
@@ -1112,15 +1854,66 @@ async def get_scheduler_state() -> dict:
 # ---------------- 每日配额接口 ----------------
 
 
+def _quota_snapshot_expired(q: dict, now: float) -> tuple[bool, float]:
+    """判断一份配额快照是否已跨越重置点（= 死数据）。
+
+    响应头快照的语义是「updated_at 那一刻剩余 remaining，reset_sec 秒后重置」。
+    因此快照的重置时刻 = updated_at + reset_sec。
+    - 若该时刻已过去 → 快照必然已被平台重置覆盖，remaining 不可信，判废。
+    - 另外兜一层：快照超过 6h 也判废（应对 reset_sec 缺失的旧数据）。
+
+    返回 (是否失效, 距重置剩余秒数)。
+    """
+    updated_at = float(q.get("updated_at") or 0)
+    if updated_at <= 0:
+        return True, 0.0
+    reset_sec = float(q.get("reset_sec") or 0)
+    age = now - updated_at
+    if reset_sec > 0:
+        left = reset_sec - age
+        if left <= 0:
+            return True, 0.0
+        return False, left
+    # reset_sec 缺失：退回纯时效判定
+    return age >= 6 * 3600, max(6 * 3600 - age, 0.0)
+
+
+# 平台每日回测配额重置时刻：北京时间 12:00（冰神确认，并由历史快照
+# updated_at=11:46:29 + reset_sec=806 → 11:59:55 反向验证）
+QUOTA_RESET_HOUR_LOCAL = 12
+
+
+def _next_quota_reset(now: float) -> float:
+    """返回「下一个北京时间 12:00 重置点」的时间戳。
+
+    用于快照失效后给出有意义的倒计时，而不是干等下一次回测。
+    """
+    from datetime import datetime, timedelta, timezone
+    tz = datetime.now().astimezone().tzinfo  # 本机时区
+    now_dt = datetime.fromtimestamp(now, tz=timezone.utc).astimezone(tz)
+    today_reset = now_dt.replace(
+        hour=QUOTA_RESET_HOUR_LOCAL, minute=0, second=0, microsecond=0,
+    )
+    if today_reset <= now_dt:
+        today_reset = today_reset + timedelta(days=1)
+    return today_reset.timestamp()
+
+
 @app.get("/api/quota")
 async def get_quota() -> dict:
     """每日回测配额。
 
     优先级（复用 v28/v69 现成链路，不重复造轮子）：
     1. 本进程 web 批次跑过 → BatchScheduler.sim_quota（响应头真实值）
-    2. platform_meta 里的共享配额（MCP submit 写入，6h 内有效）
+    2. platform_meta 里的共享配额（MCP submit 写入）
     3. 本地兜底：只报今日已提交 sim 数（诚实提示无真实剩余）
+
+    ⚠️ 关键：快照必须判「重置时刻过没过」，不能只看写入多久。
+    否则会出现：11:46 写入 remaining=3131（reset_sec=806，即 12:00 重置），
+    13:38 页面仍显示 3131 —— 而那时配额早已重置回满。
     """
+    import time as _t
+    now = _t.time()
     st = _storage()
 
     # 收集本进程所有还活着的 scheduler 的配额
@@ -1136,37 +1929,57 @@ async def get_quota() -> dict:
         try:
             meta = st.get_meta("sim_quota")
             if meta:
-                mq = json.loads(meta)
-                import time as _t
-                if mq.get("updated_at", 0) and _t.time() - mq["updated_at"] < 6 * 3600:
-                    q = mq
-                    source = "platform_meta"
+                q = json.loads(meta)
+                source = "platform_meta"
         except Exception:
-            pass
+            q = None
 
     out: dict = {"ok": True, "source": source}
+    expired = False
     if q and q.get("limit", 0) > 0:
-        import time as _t
+        expired, left = _quota_snapshot_expired(q, now)
+    if q and q.get("limit", 0) > 0 and not expired:
         limit = q["limit"]
         remaining = q["remaining"]
-        left = q.get("reset_sec", 0) - (_t.time() - q.get("updated_at", 0))
         out.update({
             "limit": limit,
             "remaining": remaining,
             "used": max(limit - remaining, 0),
             "reset_sec_left": max(int(left), 0),
             "updated_at": q.get("updated_at"),
+            "stale": False,
         })
     else:
-        # 本地兜底：今日已用（UTC 日界，与 count_simulations_since 统计口径一致）
-        from datetime import datetime, timezone
-        today_start = datetime.now(timezone.utc).replace(
-            hour=0, minute=0, second=0, microsecond=0,
-        ).isoformat()
+        if expired:
+            # 快照已跨越重置点：诚实上报「已重置，等下一次真实读数」
+            out["stale"] = True
+            out["stale_reason"] = "reset_passed"
+            out["stale_at"] = q.get("updated_at") if q else None
+            # 已经过去的那个重置点 = 快照的重置时刻（用于文案区分「刚重置」）
+            out["reset_passed_at"] = (
+                float(q.get("updated_at") or 0) + float(q.get("reset_sec") or 0)
+                if q else None
+            )
+        # 下一个重置点（北京时间 12:00），无论有无真实读数都给
+        out["next_reset_at"] = _next_quota_reset(now)
+        out["reset_hour_local"] = QUOTA_RESET_HOUR_LOCAL
+        # 本地兜底：按「本配额周期」统计已提交 sim 数。
+        # ⚠️ 口径必须对齐平台重置点（北京 12:00），不能用 UTC 日界 ——
+        # UTC 00:00 = 北京 08:00，两者差 4 小时，数字对不上会误导。
+        from datetime import datetime, timedelta, timezone
+        tz_local = datetime.now().astimezone().tzinfo
+        now_local = datetime.now(tz_local)
+        cycle_start_local = now_local.replace(
+            hour=QUOTA_RESET_HOUR_LOCAL, minute=0, second=0, microsecond=0,
+        )
+        if cycle_start_local > now_local:
+            cycle_start_local -= timedelta(days=1)
+        cycle_start = cycle_start_local.astimezone(timezone.utc).isoformat()
         out.update({
             "limit": None,
             "remaining": None,
-            "used_local": st.count_simulations_since(today_start),
+            "cycle_start_at": cycle_start_local.timestamp(),
+            "used_local": st.count_simulations_since(cycle_start),
         })
     return out
 
@@ -1260,6 +2073,10 @@ OSMOSIS_RULES = {
 # 写平台降速间隔（秒）。BRAIN 对高频写有限流，串行写必须留呼吸，
 # 否则先 429 后升级为 captcha required（实测踩过）。
 _WRITE_INTERVAL = 0.4
+# 失败点重分配：首轮写失败的点重算后补写，保 sum=100000（涉及二次写，默认关，防意外多写）
+REDISTRIBUTE_FAILED_POINTS = False
+# 写后校验：写完后读平台 sum 并列出方案外仍有分的残留 alpha（只读，默认开，无害）
+VERIFY_AFTER_WRITE = True
 
 
 def _patch_alpha_points(alpha_id: str, points: int | None) -> dict:
@@ -1312,7 +2129,7 @@ def _patch_alpha_points(alpha_id: str, points: int | None) -> dict:
 
 def _clear_existing_points(region: str, delay: int, max_scan: int = 1000) -> dict:
     client = _client()
-    records = client.list_scope_alphas(region, delay, max_scan=max_scan)
+    records = client.list_scope_alphas(region, delay, max_scan=max_scan, hidden=None)
     scored = [a for a in records if float(a.get("osmosisPoints") or 0) > 0]
     if not scored:
         return {"cleared": 0, "failed": 0, "details": []}
@@ -1345,6 +2162,40 @@ def _clear_existing_points(region: str, delay: int, max_scan: int = 1000) -> dic
             details.append({"alpha_id": alpha_id, "ok": False, "error": str(e)[:200]})
 
     return {"cleared": ok, "failed": failed, "details": details, "aborted": aborted}
+
+
+def verify_current_scope_points(region: str, delay: int, expected_ids: set[str] | None, max_scan: int = 1000) -> dict:
+    """写后校验：读本赛道平台实际 sum，并列出方案外仍有分的残留 alpha（只读）。"""
+    client = _client()
+    records = client.list_scope_alphas(region, delay, max_scan=max_scan, hidden=None)
+    total = 0.0
+    residual = []
+    for a in records:
+        pts = to_float(a.get("osmosisPoints"))
+        if pts and pts > 0:
+            total += pts
+            aid = str(a.get("id"))
+            if expected_ids and aid not in expected_ids:
+                residual.append({"alpha_id": aid, "points": int(pts)})
+    return {
+        "ok": True,
+        "scope_sum": int(round(total)),
+        "target": 100_000,
+        "matched": abs(total - 100_000) < 1,
+        "residual": residual,
+    }
+
+
+def _redistribute_failed_points(success_rows: list[dict], failed_total: int, config: OsmosisConfig) -> dict[str, int]:
+    """把失败点的总分按成功 alpha 的 (质量 + 排名衰减) 比例重分，返回 {alpha_id: 增量}。"""
+    if not success_rows or failed_total <= 0:
+        return {}
+    qs = [max(0.01, float(r.get("adjusted_quality") or 0.01)) for r in success_rows]
+    rw = rank_decay_weights(len(qs))
+    weights = [0.70 * q + 0.30 * r for q, r in zip(qs, rw)]
+    inc = allocate_with_caps(weights, int(failed_total), min_points=1,
+                             max_points=config.regular_max_points_per_alpha)
+    return {str(r.get("alpha_id")): int(p) for r, p in zip(success_rows, inc)}
 
 
 @app.get("/api/osmosis/config")
@@ -1504,6 +2355,10 @@ async def osmosis_preview(req: Request) -> dict:
     delay = int(body.get("delay", 1))
     # 真实相关性：逐个 alpha 调平台 correlations/self，慢很多，默认关闭
     use_real_corr = bool(body.get("fetch_external_correlations", False))
+    # 真实数据重算（吸收自 Step6，默认全关；开启后打分/去相关更贴近真实表现，但 API 调用量大）
+    use_yearly = bool(body.get("fetch_yearly_stats", False))
+    use_pnl = bool(body.get("fetch_pnl_for_diversity", False))
+    use_os_detail = bool(body.get("fetch_alpha_details_for_os", False))
 
     try:
         client = _client()
@@ -1515,6 +2370,9 @@ async def osmosis_preview(req: Request) -> dict:
             region=region,
             delay=delay,
             fetch_external_correlations=use_real_corr,
+            fetch_yearly_stats=use_yearly,
+            fetch_pnl_for_diversity=use_pnl,
+            fetch_alpha_details_for_os=use_os_detail,
         )
         plan = build_allocation_plan(client, region, delay, config=config)
         if plan.get("ok"):
@@ -1571,6 +2429,8 @@ async def osmosis_allocate(req: Request) -> dict:
         failed = 0
         writes = []
         aborted = None
+        original_points: dict[str, int] = {}
+        failed_rows: list[dict] = []
         for idx, row in enumerate(selected):
             alpha_id = row.get("alpha_id")
             points = row.get("osmosis_new")
@@ -1579,6 +2439,7 @@ async def osmosis_allocate(req: Request) -> dict:
             # 平台要求 1~100000，未分到分的 alpha 直接跳过，别发无效请求
             if int(points) <= 0:
                 continue
+            original_points[str(alpha_id)] = int(points)
             if idx > 0:
                 time.sleep(_WRITE_INTERVAL)
             try:
@@ -1606,6 +2467,7 @@ async def osmosis_allocate(req: Request) -> dict:
                 break
             except Exception as e:
                 failed += 1
+                failed_rows.append(row)
                 detail = {"error": str(e)[:300]}
                 # 尽量把 HTTP 状态和响应体暴露出来，方便定位
                 if hasattr(e, "response") and e.response is not None:
@@ -1620,6 +2482,36 @@ async def osmosis_allocate(req: Request) -> dict:
                     **detail,
                 })
 
+        # 失败点重分配（可选）：首轮非认证错误失败时，把失败点的分重算后补写给成功 alpha
+        redistributed: list[dict] = []
+        if REDISTRIBUTE_FAILED_POINTS and aborted is None and failed_rows:
+            failed_total = sum(int(r.get("osmosis_new") or 0) for r in failed_rows)
+            failed_ids = {str(r.get("alpha_id")) for r in failed_rows}
+            success_rows = [
+                r for r in selected
+                if str(r.get("alpha_id")) in original_points and str(r.get("alpha_id")) not in failed_ids
+            ]
+            inc_map = _redistribute_failed_points(success_rows, failed_total, config)
+            for r in success_rows:
+                aid = str(r.get("alpha_id"))
+                inc = inc_map.get(aid, 0)
+                if inc <= 0:
+                    continue
+                new_total = original_points[aid] + inc
+                try:
+                    _patch_alpha_points(aid, new_total)
+                    redistributed.append({"alpha_id": aid, "added": inc, "new_total": new_total, "ok": True})
+                except Exception as e:
+                    redistributed.append({"alpha_id": aid, "added": inc, "new_total": new_total, "ok": False, "error": str(e)[:200]})
+
+        # 写后校验（只读）
+        verify = None
+        if VERIFY_AFTER_WRITE and aborted is None:
+            try:
+                verify = verify_current_scope_points(region, delay, set(original_points.keys()), config.max_alpha_scan)
+            except Exception as e:
+                verify = {"ok": False, "error": str(e)[:200]}
+
         return {
             "ok": True,
             "scope": plan.get("scope"),
@@ -1629,6 +2521,8 @@ async def osmosis_allocate(req: Request) -> dict:
             "written": ok,
             "failed": failed,
             "writes": writes,
+            "redistributed": redistributed,
+            "verify": verify,
             "aborted": aborted,
         }
     except Exception as e:
@@ -1636,74 +2530,389 @@ async def osmosis_allocate(req: Request) -> dict:
         return {"ok": False, "error": str(e)}
 
 
+# ---------------- ARC（All Region Competition 2026）批量重跑 ----------------
+
+
+class ArcState:
+    """ARC 任务状态机（单实例，照 PnlSyncState 模式）。"""
+
+    def __init__(self) -> None:
+        self.running: bool = False
+        self.thread: threading.Thread | None = None
+        self.stop_event: threading.Event = threading.Event()
+        self.last_result: dict | None = None
+        self.last_progress: dict | None = None
+        self.checkpoint: str | None = None
+
+    def start(self, target: Callable[[Callable], dict]) -> dict:
+        if self.running:
+            return {"ok": False, "error": "ARC 任务已在运行中"}
+        self.running = True
+        self.stop_event = threading.Event()
+        self.last_progress = {"phase": "starting", "message": "准备开始…"}
+
+        def _on_progress(payload: dict) -> None:
+            self.last_progress = payload
+            bus.push("arc_progress", payload)
+
+        def _run() -> None:
+            try:
+                self.last_result = target(_on_progress)
+                _on_progress({
+                    "phase": "completed",
+                    "message": f"完成：{self.last_result.get('complete', 0)} 条 COMPLETE，"
+                               f"{self.last_result.get('failed', 0)} 条失败",
+                    "summary": self.last_result,
+                })
+            except Exception as e:
+                self.last_result = {"ok": False, "error": str(e)}
+                _on_progress({"phase": "error", "message": str(e)})
+            finally:
+                self.running = False
+
+        self.thread = threading.Thread(target=_run, daemon=True)
+        self.thread.start()
+        return {"ok": True, "message": "已启动 ARC 批量重跑"}
+
+    def stop(self) -> dict:
+        if not self.running:
+            return {"ok": False, "error": "ARC 任务未在运行"}
+        self.stop_event.set()
+        return {"ok": True, "message": "已发送停止信号"}
+
+
+arc_state = ArcState()
+
+
+@app.get("/api/arc/inventory")
+async def arc_inventory(stage: str = "OS", max_scan: int = 3000) -> dict:
+    """列出可重跑的已提交 alpha（stage=OS 且 type=REGULAR）。只读，不投递。"""
+    try:
+        client = _client()
+    except Exception as e:
+        return {"ok": False, "error": f"BRAIN 客户端初始化失败：{e}"}
+    try:
+        items = build_inventory(client, stage=stage, max_scan=max_scan)
+    except Exception as e:
+        logger.exception("ARC inventory failed")
+        return {"ok": False, "error": str(e)}
+
+    # 表达式不回传全文（前端只显示摘要），投递时后端重新拉，避免超大响应体
+    slim = []
+    for it in items:
+        slim.append({
+            **{k: v for k, v in it.items() if k != "expr"},
+            "expr_len": len(it.get("expr") or ""),
+            "expr_head": (it.get("expr") or "")[:80],
+        })
+    regions: dict[str, int] = {}
+    for it in items:
+        r = str(it.get("src_region") or "?")
+        regions[r] = regions.get(r, 0) + 1
+    return {"ok": True, "count": len(slim), "items": slim, "regions": regions}
+
+
+@app.post("/api/arc/run")
+async def arc_run(req: Request) -> dict:
+    """启动 ARC 批量重跑（后台线程）。"""
+    body = {}
+    try:
+        body = await req.json()
+    except Exception:
+        pass
+
+    universe = str(body.get("universe") or "LARGE").strip().upper()
+    if universe not in ("LARGE", "MEDIUM", "SMALL"):
+        return {"ok": False, "error": f"universe 必须是 LARGE/MEDIUM/SMALL，收到 {universe}"}
+    inherit = bool(body.get("inherit_settings", False))
+    limit = int(body.get("limit") or 10)
+    src_ids = body.get("src_ids") or []
+    min_sharpe = body.get("min_sharpe")
+    only_regions = body.get("regions") or []
+    checkpoint_name = str(body.get("checkpoint") or "").strip()
+
+    try:
+        client = _client()
+    except Exception as e:
+        return {"ok": False, "error": f"BRAIN 客户端初始化失败：{e}"}
+
+    try:
+        items = build_inventory(client)
+    except Exception as e:
+        logger.exception("ARC inventory failed")
+        return {"ok": False, "error": f"拉取 alpha 清单失败：{e}"}
+
+    if src_ids:
+        wanted = set(src_ids)
+        items = [i for i in items if i.get("src_id") in wanted]
+    if only_regions:
+        regs = {str(r).upper() for r in only_regions}
+        items = [i for i in items if str(i.get("src_region") or "").upper() in regs]
+    if min_sharpe is not None:
+        try:
+            th = float(min_sharpe)
+            items = [i for i in items
+                     if isinstance(i.get("src_sharpe"), (int, float)) and i["src_sharpe"] >= th]
+        except (TypeError, ValueError):
+            pass
+    # 按原 Sharpe 降序，先跑最有价值的
+    items.sort(key=lambda i: (i.get("src_sharpe") or -99), reverse=True)
+    items = items[: max(1, limit)]
+
+    if not items:
+        return {"ok": False, "error": "按当前筛选条件没有可跑的 alpha"}
+
+    if checkpoint_name:
+        ck = ARC_DIR / checkpoint_name
+    else:
+        ck = ARC_DIR / f"ra_run_{time.strftime('%Y%m%d_%H%M%S')}.json"
+
+    decay = body.get("decay")
+    neutral = body.get("neutralization")
+    trunc = body.get("truncation")
+    runner = ArcRunner(
+        client,
+        universe=universe,
+        inherit_settings=inherit,
+        decay=int(decay) if decay is not None else None,
+        neutralization=str(neutral) if neutral else None,
+        truncation=float(trunc) if trunc is not None else None,
+        stop_event=arc_state.stop_event,
+        checkpoint_path=ck,
+    )
+    arc_state.checkpoint = str(ck)
+
+    def _target(on_progress: Callable) -> dict:
+        runner.progress_cb = on_progress
+        return runner.run(items)
+
+    res = arc_state.start(_target)
+    if not res.get("ok"):
+        return res
+    res.update({
+        "planned": len(items),
+        "universe": universe,
+        "inherit_settings": inherit,
+        "checkpoint": str(ck),
+    })
+    return res
+
+
+def _launch_arc(client, items: list[dict], body: dict, ck: Path) -> dict:
+    """建 ArcRunner 并起后台线程（run 与 run-ids 共用）。"""
+    universe = str(body.get("universe") or "LARGE").strip().upper()
+    if universe not in ("LARGE", "MEDIUM", "SMALL"):
+        return {"ok": False, "error": f"universe 必须是 LARGE/MEDIUM/SMALL，收到 {universe}"}
+    inherit = bool(body.get("inherit_settings", False))
+    decay = body.get("decay")
+    neutral = body.get("neutralization")
+    trunc = body.get("truncation")
+
+    runner = ArcRunner(
+        client,
+        universe=universe,
+        inherit_settings=inherit,
+        decay=int(decay) if decay is not None else None,
+        neutralization=str(neutral) if neutral else None,
+        truncation=float(trunc) if trunc is not None else None,
+        stop_event=arc_state.stop_event,
+        checkpoint_path=ck,
+    )
+    arc_state.checkpoint = str(ck)
+
+    def _target(on_progress: Callable) -> dict:
+        runner.progress_cb = on_progress
+        return runner.run(items)
+
+    res = arc_state.start(_target)
+    if not res.get("ok"):
+        return res
+    res.update({
+        "planned": len(items),
+        "universe": universe,
+        "inherit_settings": inherit,
+        "checkpoint": str(ck),
+    })
+    return res
+
+
+@app.post("/api/arc/run-ids")
+async def arc_run_ids(req: Request) -> dict:
+    """按 alpha ID 直接重跑：只 GET 指定 ID，不拉全量清单。
+
+    支持逗号 / 分号 / 空格 / 换行分隔，也支持直接传数组。
+    """
+    body = {}
+    try:
+        body = await req.json()
+    except Exception:
+        pass
+
+    raw = body.get("alpha_ids")
+    if isinstance(raw, str):
+        ids = [t.strip() for t in raw.replace(",", " ").replace(";", " ").split() if t.strip()]
+    else:
+        ids = [str(x).strip() for x in (raw or []) if str(x or "").strip()]
+    if not ids:
+        return {"ok": False, "error": "请填至少一个 alpha ID（逗号/空格/换行分隔）"}
+
+    try:
+        client = _client()
+    except Exception as e:
+        return {"ok": False, "error": f"BRAIN 客户端初始化失败：{e}"}
+
+    try:
+        items, errors = fetch_alphas_by_ids(client, ids)
+    except Exception as e:
+        logger.exception("ARC run-ids 拉取失败")
+        return {"ok": False, "error": f"拉取 alpha 失败：{e}"}
+
+    if not items:
+        return {"ok": False, "error": "没有可用的 REGULAR alpha", "errors": errors}
+
+    ck = ARC_DIR / f"ra_ids_{time.strftime('%Y%m%d_%H%M%S')}.json"
+    res = _launch_arc(client, items, body, ck)
+    if res.get("ok"):
+        res["errors"] = errors
+        res["requested"] = len(ids)
+    return res
+
+
+@app.get("/api/arc/status")
+async def arc_status() -> dict:
+    return {
+        "ok": True,
+        "running": arc_state.running,
+        "progress": arc_state.last_progress,
+        "result": arc_state.last_result,
+        "checkpoint": arc_state.checkpoint,
+    }
+
+
+@app.post("/api/arc/stop")
+async def arc_stop() -> dict:
+    return arc_state.stop()
+
+
+@app.get("/api/arc/checkpoints")
+async def arc_checkpoints() -> dict:
+    """列出历史 checkpoint 文件（用于续跑/回看）。"""
+    try:
+        ARC_DIR.mkdir(parents=True, exist_ok=True)
+        files = sorted(ARC_DIR.glob("ra_run_*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+        return {
+            "ok": True,
+            "count": len(files),
+            "files": [
+                {
+                    "name": p.name,
+                    "mtime": datetime.fromtimestamp(p.stat().st_mtime).isoformat(timespec="seconds"),
+                    "size": p.stat().st_size,
+                }
+                for p in files[:50]
+            ],
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/api/arc/results")
+async def arc_results(checkpoint: str = "") -> dict:
+    """读取某个 checkpoint 的结果；不传则读当前任务的结果。"""
+    name = checkpoint or arc_state.checkpoint
+    if not name:
+        return {"ok": False, "error": "尚无结果文件"}
+    p = ARC_DIR / name
+    if not p.exists():
+        return {"ok": False, "error": f"结果文件不存在：{name}"}
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except Exception as e:
+        return {"ok": False, "error": f"读取失败：{e}"}
+
+    rows = data.get("results", [])
+    complete = [r for r in rows if r.get("status") == "COMPLETE"]
+    # 达标 = 至少一个子区域 Fitness ≥ 1.0 且 Sharpe ≥ 1.58
+    qualified = [
+        r for r in complete
+        if (r.get("fitness_pass") or 0) > 0 and (r.get("sharpe_max") or 0) >= 1.58
+    ]
+    return {
+        "ok": True,
+        "checkpoint": name,
+        "updated_at": data.get("updated_at"),
+        "universe": data.get("universe"),
+        "count": len(rows),
+        "complete": len(complete),
+        "failed": len(rows) - len(complete),
+        "qualified": len(qualified),
+        "rows": rows,
+    }
+
+
 # ---------------- 手动算 corr（单 alpha，按需触发，节省资源） ----------------
 
 
 @app.post("/api/corr/compute")
 async def compute_corr_one(req: Request) -> dict:
-    """手动对单个已同步 PnL 的 alpha 计算 Self + PPA corr，写回 alphas 表。
+    """手动算单个 alpha 的 Self + PPA corr（**纯本地算法**）。
 
     Body: {"alpha_id": "Xg7NRLgm"}
+
+    池子 = 账号下同 region 的**已提交(stage=OS)** alpha 的 PnL；这批数据不属于
+    alphas 候选表，单独缓存在 outputs/corr_pool/（首次拉一遍会慢，之后 24h 秒回）。
+    目标 alpha 不要求在本地 alphas 表里：库里没有就现场从平台取 region + PnL。
     """
     body = await req.json() if req.headers.get("content-type", "").startswith("application/json") else {}
     alpha_id = body.get("alpha_id", "").strip()
     if not alpha_id:
         raise HTTPException(400, "alpha_id 必填")
 
-    from wq_engine.api.client import APIClient
+    from wq_engine.api.corr_pool import build_pool, get_pnl
     from wq_engine.api.local_corr import calculate_correlation
-    from wq_engine.api.config import BrainConfig
 
     st = _storage()
-    alpha = st.get_alpha(alpha_id)
-    if not alpha:
-        raise HTTPException(404, f"alpha 不存在：{alpha_id}")
+    client = _client()
 
-    pnl_json = alpha.get("pnl_json")
-    if not pnl_json:
-        raise HTTPException(400, f"{alpha_id} 缺 PnL，先做 PnL 同步")
-
-    # 从 pnl_json 还原 records + region
-    if isinstance(pnl_json, str):
-        import json as _json
-        pnl_json = _json.loads(pnl_json)
-    records = (pnl_json or {}).get("records") if isinstance(pnl_json, dict) else None
-    if not records:
-        raise HTTPException(400, f"{alpha_id} 的 PnL 数据为空")
-
-    settings_raw = alpha.get("settings")  # alpha 表里有独立的 region 列，没有 settings JSON
-    if isinstance(settings_raw, str):
-        import json as _json
+    # ---- 目标 alpha 的 region：本地库优先，缺了问平台 ----
+    alpha = st.get_alpha(alpha_id) or {}
+    region = alpha.get("region")
+    if not region:
         try:
-            settings_raw = _json.loads(settings_raw)
-        except Exception:
-            settings_raw = {}
-    settings = settings_raw if isinstance(settings_raw, dict) else {}
-    region = settings.get("region") or alpha.get("region")
+            detail = client.get_alpha_details(alpha_id)
+        except Exception as e:
+            raise HTTPException(404, f"{alpha_id} 不在本地库，且平台也取不到：{str(e)[:140]}")
+        region = (detail.get("settings") or {}).get("region")
     if not region:
         raise HTTPException(400, f"{alpha_id} 缺 region，无法算 corr")
 
-    pnls_by_id = {alpha_id: records}
+    # ---- 目标 PnL：本地库优先，缺了从平台拉（顺带落缓存）----
+    records = None
+    pnl_json = alpha.get("pnl_json")
+    if pnl_json:
+        if isinstance(pnl_json, str):
+            try:
+                pnl_json = json.loads(pnl_json)
+            except Exception:
+                pnl_json = None
+        if isinstance(pnl_json, dict):
+            records = pnl_json.get("records")
+        elif isinstance(pnl_json, list):
+            records = pnl_json
+    if not records:
+        records = get_pnl(client, alpha_id)
+    if not records:
+        raise HTTPException(400, f"{alpha_id} 拿不到 PnL，无法算 corr")
 
-    # 拉同 region 已同步 PnL 的其他 alpha 做池子（最多 2000 个够用了）
-    with st._lock:
-        rows = st._conn.execute(
-            "SELECT alpha_id, pnl_json FROM alphas WHERE region=? AND pnl_json IS NOT NULL AND alpha_id != ? LIMIT 2000",
-            (region, alpha_id),
-        ).fetchall()
-    import json as _json
-    pool_alphas = []
-    for r in rows:
-        aid = r["alpha_id"]
-        try:
-            data = _json.loads(r["pnl_json"]) if isinstance(r["pnl_json"], str) else r["pnl_json"]
-            recs = data.get("records") if isinstance(data, dict) else None
-            if recs:
-                pnls_by_id[aid] = recs
-                pool_alphas.append({"id": aid, "settings": {"region": region}})
-        except Exception:
-            pass
-    pool_alphas.insert(0, {"id": alpha_id, "settings": {"region": region}})
+    # ---- 同 region 的 OS 池子（带 stage/classifications —— select_pool 的判据）----
+    try:
+        pool_alphas, pnls_by_id = build_pool(client, region)
+    except Exception as e:
+        raise HTTPException(502, f"拉 OS 池子失败：{str(e)[:160]}")
+
+    pnls_by_id[alpha_id] = {"records": records}
+    # 目标插最前；stage=IS 表明它不是 OS，不会进池（select_pool 也会跳过 target）
+    pool_alphas.insert(0, {"id": alpha_id, "settings": {"region": region}, "stage": "IS"})
 
     # 算
     try:
@@ -1722,7 +2931,21 @@ async def compute_corr_one(req: Request) -> dict:
         ppa_err = None
 
     if not self_r and not ppa_r:
-        raise HTTPException(422, f"corr 算失败：self={self_err} ppa={ppa_err}")
+        # 池子空 / 算不出：优雅返回，不抛 422（前端按 max_corr=null 显示）
+        n_pool = len({a.get("id") for a in pool_alphas} - {alpha_id})
+        return {
+            "ok": False,
+            "alpha_id": alpha_id,
+            "region": region,
+            "self": None,
+            "ppa": None,
+            "max_corr": None,
+            "max_corr_source": None,
+            "pool_size": n_pool,
+            "message": ("该 region 没有可比池子（账号下该 region 除它自己外没有已提交 alpha）"
+                        if n_pool == 0
+                        else f"算不出：self={self_err} ppa={ppa_err}"),
+        }
 
     # 写回
     def _pick_max(s, p):
@@ -1745,10 +2968,10 @@ async def compute_corr_one(req: Request) -> dict:
             (
                 self_r["min"] if self_r else None,
                 self_r["max"] if self_r else None,
-                _json.dumps(self_r["top5"]) if self_r else None,
+                json.dumps(self_r["top5"]) if self_r else None,
                 ppa_r["min"] if ppa_r else None,
                 ppa_r["max"] if ppa_r else None,
-                _json.dumps(ppa_r["top5"]) if ppa_r else None,
+                json.dumps(ppa_r["top5"]) if ppa_r else None,
                 mc_src[1] if mc_src else None,
                 mc_src[0] if mc_src else None,
                 datetime.now(timezone.utc).isoformat(),
@@ -1760,10 +2983,12 @@ async def compute_corr_one(req: Request) -> dict:
     return {
         "ok": True,
         "alpha_id": alpha_id,
+        "region": region,
         "self": self_r,
         "ppa": ppa_r,
         "max_corr": mc_src[1] if mc_src else None,
         "max_corr_source": mc_src[0] if mc_src else None,
+        "pool_size": self_r["pool_size"] if self_r else (ppa_r["pool_size"] if ppa_r else 0),
     }
 
 
@@ -1902,6 +3127,10 @@ async def memo_submit(req: Request) -> dict:
         raise HTTPException(400, "alpha_id 必填")
     st = _storage()
     _ensure_memo_table(st)
+    # 提交保护（v82，260923）：QUICK 初筛 alpha 必须先有 FULL 复验证据
+    guard = _full_backed_reason(st, alpha_id)
+    if guard:
+        raise HTTPException(409, guard)
     try:
         resp = _client().submit_alpha(alpha_id)
     except Exception as e:

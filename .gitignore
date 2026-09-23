@@ -1,36 +1,27 @@
-# ===== Python =====
+﻿# ===== Python =====
 __pycache__/
 *.py[cod]
+.venv/
 *.egg-info/
 .eggs/
 
-# ===== 虚拟环境 =====
-.venv/
-venv/
-env/
-
-# ===== 运行时生成（绝不入库）=====
-# 数据库 / 回测数据 / 日志 / 输出
-data/
-logs/
-outputs/
-inputs/
-dist_v*/
-*.db
-*.sqlite3
-*.log
-
-# ===== 凭据与本地配置 =====
-.env
-.env.local
-
-# ===== 构建产物 =====
+# ===== 构建产物（PyInstaller，共占 7GB+，绝不上传）=====
 build/
+build_dist*/
 dist/
-*.spec
+dist_*/
+dist_onefile*/
 
-# ===== IDE / 系统 =====
-.idea/
-.vscode/
+# ===== 日志 =====
+*.log
+logs/
+smoke_v15.err
+
+# ===== 运行数据（本地回测结果，不进版本库）=====
+data/*.db
+data/*.db-*
+
+# ===== 系统文件 =====
 .DS_Store
 Thumbs.db
+desktop.ini

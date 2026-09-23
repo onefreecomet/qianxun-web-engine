@@ -24,7 +24,13 @@
       <a href="#sec-memo">Alpha 备忘录 <span class="kbd">4</span></a>
       <a href="#sec-concurrency">设置 <span class="kbd">5</span></a>
       <a href="#sec-osmosis">Osmosis 分配器 <span class="kbd">6</span></a>
-      <a href="/simulator" target="_blank" rel="noopener" class="sim-link">Alpha Simulator</a>
+      <a href="#sec-arc">ARC 回测 <span class="kbd">7</span></a>
+      <a href="/simulator" target="_blank" rel="noopener" class="sim-link">
+        Alpha Simulator 模拟器 <span class="kbd kbd-ext">↗</span>
+      </a>
+      <a href="/credits" target="_blank" rel="noopener" class="sim-link">
+        Credits 积分签到 <span class="kbd kbd-ext">↗</span>
+      </a>
     </nav>
     <div class="topbar-right">
       <div class="quota-card" id="quotaBadge" title="每日回测配额（响应头真实值）">
@@ -56,35 +62,34 @@
       </div>
 
       <div class="hero-stats" id="statCards">
-        <div class="h-stat">
-          <div class="h-stat-icon"><svg class="ico" viewBox="0 0 16 16"><path d="M2 8h3l2-5 2 10 2-5h3"/></svg></div>
-          <div class="h-stat-label">Alpha 总数</div>
-          <div class="h-stat-value" id="statAlphas">—</div>
-          <div class="h-stat-delta">—</div>
+        <div class="gmetric gmetric-live" id="todaySubmittedCard">
+          <span class="gmetric-label">Today Submitted <i class="gsrc gsrc-live" title="BRAIN 当日已提交 alpha 数（按美东日界起算：夏令时对应北京时间 12:00 重置，冬令时顺延为 13:00）">B</i></span>
+          <span class="gmetric-value" id="gTodaySubmitted">—</span>
         </div>
-        <div class="h-stat">
-          <div class="h-stat-icon"><svg class="ico" viewBox="0 0 16 16"><path d="M8 2 14 5 8 8 2 5Z"/><path d="M2 9l6 3 6-3"/></svg></div>
-          <div class="h-stat-label">批次</div>
-          <div class="h-stat-value" id="statBatches">—</div>
-          <div class="h-stat-delta">—</div>
+        <div class="gmetric gmetric-live gmetric-clickable" id="osmosisCard"
+             role="button" tabindex="0"
+             title="点击查看「日渗透分变化趋势」（本机按天记录，BRAIN 无历史接口）">
+          <span class="gmetric-label">Osmosis Rank <i class="gsrc gsrc-live" title="实时来自 BRAIN /users/self/consultant">B</i></span>
+          <span class="gmetric-value" id="gOsmosisRank">—</span>
+          <span class="gmetric-spark" id="osmSpark" aria-hidden="true"></span>
         </div>
-        <div class="h-stat">
-          <div class="h-stat-icon"><svg class="ico" viewBox="0 0 16 16"><path d="M9 2 4 9h4l-1 5 6-8H9Z"/></svg></div>
-          <div class="h-stat-label">运行中</div>
-          <div class="h-stat-value" id="statRunning">—</div>
-          <div class="h-stat-delta">—</div>
+        <div class="gmetric gmetric-live">
+          <span class="gmetric-label">VF <i class="gsrc gsrc-live" title="实时来自 BRAIN，Value Factor">B</i></span>
+          <span class="gmetric-value" id="gVF">—</span>
         </div>
-        <div class="h-stat">
-          <div class="h-stat-icon"><svg class="ico" viewBox="0 0 16 16"><path d="M3 13v-5M8 13V4M13 13v-8"/></svg></div>
-          <div class="h-stat-label">回测数</div>
-          <div class="h-stat-value" id="statSims">—</div>
-          <div class="h-stat-delta">—</div>
+        <div class="gmetric gmetric-sec gmetric-clickable" id="totalPaymentCard"
+             role="button" tabindex="0"
+             title="点击查看每日 Base Payment 趋势（BRAIN base-payment 活动）">
+          <span class="gmetric-label">Total Payment <i class="gsrc gsrc-live" title="来自 BRAIN base-payment 活动（全部累计 total.value）">B</i></span>
+          <span class="gmetric-value" id="gCommunity">—</span>
+          <span class="gmetric-spark" aria-hidden="true"></span>
         </div>
-        <div class="h-stat">
-          <div class="h-stat-icon"><svg class="ico" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M5.5 8l2 2 3.5-4.5"/></svg></div>
-          <div class="h-stat-label">完成回测</div>
-          <div class="h-stat-value" id="statSimsDone">—</div>
-          <div class="h-stat-delta">—</div>
+        <div class="gmetric gmetric-sec gmetric-clickable" id="signalsCard"
+             role="button" tabindex="0"
+             title="点击查看已提交 alpha 清单（BRAIN /users/self/alphas）">
+          <span class="gmetric-label">Signals</span>
+          <span class="gmetric-value" id="gSignals">—</span>
+          <span class="gmetric-spark" aria-hidden="true"></span>
         </div>
       </div>
     </section>
@@ -145,7 +150,7 @@
           </div>
         </div>
 
-        <div class="card">
+        <div class="card card-pnl">
           <div class="card-head">
             <div class="card-title"><div class="card-title-icon"><svg class="ico" viewBox="0 0 16 16"><path d="M4 4a5 5 0 0 1 9 3"/><path d="M13 3v4h-4"/><path d="M12 12a5 5 0 0 1-9-3"/><path d="M3 13v-4h4"/></svg></div>PnL 同步</div>
             <div class="card-head-right">
@@ -200,6 +205,17 @@
               </p>
             </div>
           </div>
+
+          <!-- 底部直达条：一键打开 BRAIN 平台（卡的直接子元素，横跨卡宽、贴底） -->
+          <a class="quick-link-bar" href="https://platform.worldquantbrain.com/"
+             target="_blank" rel="noopener" title="在新标签页打开 WorldQuant BRAIN 平台">
+            <span class="quick-link-mark">WQ</span>
+            <span class="quick-link-text">
+              <span class="quick-link-name">BRAIN 平台</span>
+              <span class="quick-link-url">platform.worldquantbrain.com</span>
+            </span>
+            <svg class="ico quick-link-go" viewBox="0 0 16 16"><path d="M6.5 3.5H13v6.5"/><path d="M13 3 4 12"/></svg>
+          </a>
         </div>
       </div>
     </section>
@@ -208,8 +224,9 @@
     <span id="sec-sync"></span>
 
     <!-- ============ AI 批次 ============ -->
-    <section id="sec-batches" class="section">
-      <div class="card">
+    <section id="sec-batches" class="section position-relative">
+      <div class="ai-glow-backdrop" aria-hidden="true"></div>
+      <div class="card card-ai-glow">
         <div class="card-head">
           <div class="card-title"><div class="card-title-icon"><svg class="ico" viewBox="0 0 16 16"><path d="M5 3 12 8 5 13Z"/></svg></div>AI 批次</div>
           <div class="card-head-right">
@@ -350,6 +367,10 @@
               <input type="checkbox" id="osmosisRealCorr" style="width:14px;height:14px;accent-color:var(--accent)">
               用真实相关性（慢）
             </label>
+            <label style="display:flex;gap:7px;align-items:center;font-size:12px;color:var(--text-dim);cursor:pointer" title="勾选后拉真实 yearly-stats/pnl/OS detail 重算打分与去相关，更准但 API 调用量大；对应 Step6 的 FETCH_YEARLY_STATS/FETCH_PNL_FOR_DIVERSITY">
+              <input type="checkbox" id="osmosisRealData" style="width:14px;height:14px;accent-color:var(--accent)">
+              用真实数据重算（更准，慢）
+            </label>
           </div>
         </div>
       </div>
@@ -409,6 +430,194 @@
       </div>
     </section>
 
+    <!-- ============ ARC 回测（Region-Agnostic） ============ -->
+    <section id="sec-arc" class="section">
+      <div class="page-head">
+        <div>
+          <h1 class="page-title">ARC 回测（Region-Agnostic）</h1>
+          <p class="page-sub">把已提交的 Regular alpha 以 ALL/D1 重跑，看它跨区域还活不活</p>
+        </div>
+      </div>
+
+      <!-- 机制说明 -->
+      <div class="card" style="margin-bottom:16px">
+        <div class="card-body" style="padding:14px 18px">
+          <div style="display:flex;gap:10px;align-items:flex-start">
+            <svg class="ico" viewBox="0 0 16 16" style="margin-top:2px;flex:none"><circle cx="8" cy="8" r="7"/><path d="M8 7v4M8 5h0"/></svg>
+            <div style="font-size:13px;line-height:1.7;color:var(--text-dim)">
+              <b style="color:var(--text)">RA 是什么：</b>普通模拟把 region 改成 ALL 是<b>无效</b>的，必须显式提交
+              <code>type: REGION_AGNOSTIC</code>，表达式放 <code>regular</code> 字段。ALL 下 universe 只有
+              LARGE / MEDIUM / SMALL 三档，delay 固定 1。<br>
+              <b style="color:var(--text)">结果长什么样：</b>投递成功返回 <code>RA_PARENT</code>（容器，它自己的 is 只有 checks，
+              <b>没有 sharpe/fitness</b>），真实指标在它的 <code>children</code> 上，每个子 alpha 落在一个具体 region，
+              比如 USA/TOP3000、EUR/TOP2500、ASI/MINVOL1M、GLB/MINVOL1M。<br>
+              <b style="color:var(--good)">选品铁律（2026-09-09 IND 20 条普查）：</b>
+              候选要<b>结构干净</b>，即表达式里<b>不要有</b> <code>group_rank</code>、<code>trade_when</code>、<code>ts_backfill</code>、
+              analyst 类字段。干净组 7 条里 5 条出了 F≥1.0 子区（71%），污染组 10 条<b>一条都没有</b>，两组零交叉。
+              <b style="color:var(--warn)">别用原 Sharpe 排序挑</b>，那个完全不能预测 RA 成败。<br>
+              <b>达标子区只出在 EUR 和 GLB</b>（ASI、USA 实测零达标）；报
+              <code>must have more than one regions</code> 是字段无跨区覆盖，确定性失败，重试无用。<br>
+              <span class="muted">边界：只创建 IS 模拟与记录结果，不设置属性、不提交 alpha。</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 控制面板 -->
+      <div class="card" style="margin-bottom:16px">
+        <div class="card-body" style="padding:14px 18px">
+          <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-end">
+            <div>
+              <div class="conc-label" style="margin-bottom:6px">Universe（ALL 下三档）</div>
+              <select id="arcUniverse"
+                      style="min-width:110px;background:var(--bg-2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:6px;font:500 13px var(--mono)">
+                <option value="LARGE" selected>LARGE（实测最佳）</option>
+                <option value="MEDIUM">MEDIUM</option>
+                <option value="SMALL">SMALL</option>
+              </select>
+            </div>
+            <div>
+              <div class="conc-label" style="margin-bottom:6px">中性化</div>
+              <select id="arcNeutral"
+                      style="min-width:130px;background:var(--bg-2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:6px;font:500 13px var(--mono)">
+                <option value="STATISTICAL" selected>STATISTICAL</option>
+                <option value="MARKET">MARKET</option>
+                <option value="INDUSTRY">INDUSTRY</option>
+                <option value="SUBINDUSTRY">SUBINDUSTRY</option>
+                <option value="SECTOR">SECTOR</option>
+                <option value="CROWDING">CROWDING</option>
+                <option value="SLOW_AND_FAST">SLOW_AND_FAST</option>
+              </select>
+            </div>
+            <div>
+              <div class="conc-label" style="margin-bottom:6px">Decay</div>
+              <input id="arcDecay" type="number" value="10" min="0" step="1"
+                     style="width:80px;background:var(--bg-2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:6px;font:500 13px var(--mono)">
+            </div>
+            <div>
+              <div class="conc-label" style="margin-bottom:6px">Truncation</div>
+              <input id="arcTrunc" type="number" value="0.08" min="0.001" max="1" step="0.01"
+                     style="width:80px;background:var(--bg-2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:6px;font:500 13px var(--mono)">
+            </div>
+            <label style="display:flex;gap:7px;align-items:center;font-size:12px;color:var(--text-dim);cursor:pointer"
+                   title="用每个源 alpha 自己的 decay/中性化/truncation，只把 region 换成 ALL。实测对换手率没有帮助。">
+              <input type="checkbox" id="arcInherit" style="width:14px;height:14px;accent-color:var(--accent)">
+              继承源 settings
+            </label>
+          </div>
+
+          <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-end;margin-top:12px;
+                      padding-top:12px;border-top:1px solid var(--border)">
+            <div>
+              <div class="conc-label" style="margin-bottom:6px">原 Sharpe ≥</div>
+              <input id="arcMinSharpe" type="number" value="1.5" step="0.1"
+                     style="width:90px;background:var(--bg-2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:6px;font:500 13px var(--mono)">
+            </div>
+            <div>
+              <div class="conc-label" style="margin-bottom:6px">最多跑几条</div>
+              <input id="arcLimit" type="number" value="5" min="1" max="300" step="1"
+                     style="width:90px;background:var(--bg-2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:6px;font:500 13px var(--mono)">
+            </div>
+            <div style="flex:1;min-width:220px">
+              <div class="conc-label" style="margin-bottom:6px">只跑这些 region（不选=全部）</div>
+              <div id="arcRegions" style="display:flex;gap:8px;flex-wrap:wrap;font:500 12px var(--mono)">
+                <span class="muted">扫描后加载</span>
+              </div>
+            </div>
+            <button class="btn" id="btnArcScan">
+              <svg class="ico" viewBox="0 0 16 16"><circle cx="7" cy="7" r="5"/><path d="M11 11l4 4"/></svg>扫描清单
+            </button>
+            <button class="btn btn-primary" id="btnArcRun">
+              <svg class="ico" viewBox="0 0 16 16"><path d="M5 3 12 8 5 13Z"/></svg>开始重跑
+            </button>
+            <button class="btn" id="btnArcStop" style="border-color:var(--warn);color:var(--warn)">
+              <svg class="ico" viewBox="0 0 16 16"><path d="M5 5h6v6H5z"/></svg>停止
+            </button>
+            <button class="btn" id="btnArcRefresh">
+              <svg class="ico" viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.5-3.5"/><path d="M13 3v3h-3"/></svg>刷新结果
+            </button>
+          </div>
+
+          <!-- 按 ID 直接重跑：只 GET 指定 ID，不做全量扫描 -->
+          <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
+            <div class="conc-label" style="margin-bottom:6px">
+              按 Alpha ID 直接重跑
+              <span class="muted" style="font-weight:400">（只拉这几条，不扫全量；逗号 / 空格 / 换行分隔）</span>
+            </div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+              <textarea id="arcIds" rows="2" placeholder="例：JjxnJRgA, QPGZjOYG, leWYXVRO"
+                        style="flex:1;min-width:300px;background:var(--bg-2);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:6px;font:500 13px var(--mono);resize:vertical"></textarea>
+              <button class="btn btn-primary" id="btnArcRunIds">
+                <svg class="ico" viewBox="0 0 16 16"><path d="M5 3 12 8 5 13Z"/></svg>按 ID 重跑
+              </button>
+              <span id="arcIdsHint" class="muted" style="font-size:12px"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 状态 -->
+      <div id="arcStatus" class="card" style="margin-bottom:16px;display:none">
+        <div class="card-body" id="arcStatusBody" style="padding:14px 18px"></div>
+      </div>
+
+      <!-- 清单 -->
+      <div class="card" style="margin-bottom:16px">
+        <div class="card-title">
+          <div class="card-title-icon"><svg class="ico" viewBox="0 0 16 16"><path d="M4 11h8M4 8h8M4 5h8"/></svg></div>
+          可重跑清单（OS + REGULAR）<span id="arcInvCount" class="muted" style="margin-left:8px;font-weight:400">未扫描</span>
+        </div>
+        <div class="card-body" style="padding:0">
+          <div style="overflow:auto;max-height:340px">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th style="width:34px"><input type="checkbox" id="arcSelAll" style="width:14px;height:14px;accent-color:var(--accent)"></th>
+                  <th>Alpha</th>
+                  <th>原 Region/Univ</th>
+                  <th>S</th><th>F</th><th>Tvr</th>
+                  <th>提交日</th>
+                  <th>表达式</th>
+                </tr>
+              </thead>
+              <tbody id="arcInvBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- 结果 -->
+      <div id="arcResult" class="card" style="display:none">
+        <div class="card-title">
+          <div class="card-title-icon"><svg class="ico" viewBox="0 0 16 16"><path d="M3 3v10h10V3H3z"/></svg></div>
+          重跑结果
+        </div>
+        <div class="card-body" style="padding:0">
+          <div id="arcOverview" style="padding:14px 18px;border-bottom:1px solid var(--border)"></div>
+          <div style="overflow:auto;max-height:620px">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th style="width:30px"></th>
+                  <th>源 Alpha</th>
+                  <th>原 Reg</th>
+                  <th>原 S/F</th>
+                  <th>子数</th>
+                  <th>子 S（均 / 最小~最大）</th>
+                  <th>子 F 均</th>
+                  <th>F≥1 区域</th>
+                  <th>子 Tvr 均</th>
+                  <th>状态</th>
+                  <th>RA_PARENT</th>
+                </tr>
+              </thead>
+              <tbody id="arcResBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
   </main>
 
   <!-- 提示词编辑弹窗 -->
@@ -432,6 +641,130 @@
         <button class="btn" id="btnPromptModalCancel">取消</button>
         <button class="btn btn-primary" id="btnPromptSave">保存</button>
       </div>
+    </div>
+  </div>
+
+  <!-- 日渗透分趋势弹窗（点顶部 Osmosis Rank 卡片打开） -->
+  <div class="osm-modal" id="osmModal" hidden>
+    <div class="osm-modal-backdrop" data-osm-close></div>
+    <div class="osm-modal-card" role="dialog" aria-modal="true" aria-labelledby="osmModalTitle">
+      <button class="osm-modal-close" id="osmModalClose" title="关闭（Esc）">×</button>
+      <div class="osm-modal-head">
+        <span class="osm-modal-eyebrow">Osmosis Rank</span>
+        <h3 class="osm-modal-title" id="osmModalTitle">日渗透分变化趋势</h3>
+        <p class="osm-modal-sub" id="osmModalSub">正在读取本机记录…</p>
+      </div>
+      <div class="osm-chart-wrap">
+        <svg id="osmChart" viewBox="0 0 760 400" role="img" aria-label="日渗透分变化趋势"></svg>
+      </div>
+      <div class="osm-modal-foot">
+        <div class="osm-stat"><span class="osm-stat-label">最新</span><span class="osm-stat-value" id="osmLatest">—</span></div>
+        <div class="osm-stat"><span class="osm-stat-label">区间均值</span><span class="osm-stat-value" id="osmAvg">—</span></div>
+        <div class="osm-stat"><span class="osm-stat-label">区间最高</span><span class="osm-stat-value" id="osmMax">—</span></div>
+        <div class="osm-stat"><span class="osm-stat-label">记录天数</span><span class="osm-stat-value" id="osmDays">—</span></div>
+      </div>
+      <div class="osm-modal-note" id="osmModalNote">
+        BRAIN 只提供当日渗透分（dailyOsmosisRank），没有历史接口，趋势由本机按天累积。服务常驻即可自动记录，无需手动操作。
+      </div>
+    </div>
+  </div>
+
+  <!-- 已提交 Alpha 清单弹窗（点顶部 Signals 卡片打开） -->
+  <div class="osm-modal" id="sigModal" hidden>
+    <div class="osm-modal-backdrop" data-sig-close></div>
+    <div class="osm-modal-card osm-modal-card-wide" role="dialog" aria-modal="true" aria-labelledby="sigModalTitle">
+      <button class="osm-modal-close" id="sigModalClose" title="关闭（Esc）">×</button>
+      <div class="osm-modal-head">
+        <span class="osm-modal-eyebrow">Signals</span>
+        <h3 class="osm-modal-title" id="sigModalTitle">已提交 Alpha 清单</h3>
+        <p class="osm-modal-sub" id="sigModalSub">正在读取 BRAIN…</p>
+      </div>
+
+      <div class="sig-toolbar" id="sigToolbar">
+        <div class="sig-filters" id="sigRegionFilters"></div>
+        <div class="sig-toolbar-right">
+          <label class="sig-search">
+            <svg class="ico" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input type="search" id="sigSearch" placeholder="搜 ID / 区域 / 金字塔 / 表达式" autocomplete="off">
+          </label>
+          <select class="sig-select" id="sigSort" title="排序方式">
+            <option value="dateSubmitted">提交时间 ↓</option>
+            <option value="sharpe">IS Sharpe ↓</option>
+            <option value="fitness">IS Fitness ↓</option>
+            <option value="returns">IS Returns ↓</option>
+            <option value="margin">IS Margin ↓</option>
+            <option value="turnover">Turnover ↑</option>
+          </select>
+          <button class="sig-btn" id="sigRefreshBtn" title="强制重新拉取 BRAIN 已提交 alpha（绕过 120s 缓存）">⟳ 同步</button>
+        </div>
+      </div>
+
+      <div class="sig-table-wrap">
+        <table class="sig-table">
+          <thead>
+            <tr>
+              <th class="sig-th-id">Alpha ID</th>
+              <th title="按美东时间（America/New_York）归日，与 BRAIN 平台显示一致">提交日</th>
+              <th>区域</th>
+              <th>设置</th>
+              <th class="sig-th-num">Sharpe</th>
+              <th class="sig-th-num">Fitness</th>
+              <th class="sig-th-num">Returns</th>
+              <th class="sig-th-num">Turnover</th>
+              <th class="sig-th-num">Margin</th>
+              <th class="sig-th-py">金字塔</th>
+              <th>状态</th>
+            </tr>
+          </thead>
+          <tbody id="sigTbody"></tbody>
+        </table>
+        <div class="sig-loading" id="sigLoading">正在读取 BRAIN…</div>
+      </div>
+
+      <div class="sig-pager" id="sigPager"></div>
+
+      <div class="osm-modal-note" id="sigModalNote">
+        本清单是逐条拉取的明细（<code>GET /users/self/alphas</code>，已提交 = 状态非 UNSUBMITTED / IS_FAIL）。
+        注意：同一个账号在 BRAIN 里其实有<b>三个不同的「已提交数」</b>，口径由平台各自定义、互不公开，所以数字必然对不上：
+        <ul class="sig-note-list">
+          <li><b>80</b> = 顶部 SIGNALS 卡片，来自 <code>/users/self/consultant</code> 的 <code>submissionsCount</code>（leaderboard 汇总字段，可能延迟刷新）</li>
+          <li><b>87</b> = 你在 Genius 资格页（<code>platform.worldquantbrain.com/genius</code>）看到的 <code>Signals</code>，由 Genius 子系统另算（标准 BRAIN API 拿不到这个数字）</li>
+          <li><b>136</b> = 上面这份明细清单的条数（我拉到的真实数据，最可靠）</li>
+        </ul>
+        结论：卡片的 80 不是「平台数」的全集，它和 Genius 的 87 只是 BRAIN 两个不同的统计口径。本清单以逐条明细（136）为准。
+      </div>
+    </div>
+  </div>
+
+  <!-- Total Payment 弹窗：每日 Base Payment 折线图（横向滑动 + 磁吸 + odometer 联动） -->
+  <div class="osm-modal" id="payModal" hidden>
+    <div class="osm-modal-backdrop" data-pay-close></div>
+    <div class="osm-modal-card osm-modal-card-wide" role="dialog" aria-modal="true" aria-labelledby="payModalTitle">
+      <button class="osm-modal-close" id="payModalClose" title="关闭（Esc）">×</button>
+      <div class="osm-modal-head">
+        <span class="osm-modal-eyebrow">Base Payment</span>
+        <h3 class="osm-modal-title" id="payModalTitle">每日 Base Payment 趋势</h3>
+        <p class="osm-modal-sub" id="payModalSub">BRAIN base-payment 活动</p>
+      </div>
+      <div class="pay-odometer">
+        <div class="pay-odo-main"><span class="pay-odo-cur">$</span><span class="pay-odo-val" id="payOdoVal" data-v="0">0.00</span></div>
+        <div class="pay-odo-meta">
+          <div class="pay-odo-date" id="payOdoDate">—</div>
+          <div class="pay-odo-sub">当日提交 <b id="payOdoSub" data-v="0">0</b> 个 alpha</div>
+        </div>
+      </div>
+      <div class="pay-summary" id="paySummary"></div>
+      <div class="pay-charts">
+        <div class="pay-chart-block">
+          <div class="pay-chart-label">Base Payment（每日）</div>
+          <canvas id="payChart" class="pay-chart"></canvas>
+        </div>
+        <div class="pay-chart-block">
+          <div class="pay-chart-label">提交 Alpha 数（每日）</div>
+          <canvas id="subChart" class="pay-chart pay-chart-sub"></canvas>
+        </div>
+      </div>
+      <div class="pay-hint">拖拽横向滑动 · 悬停磁吸到数据点 · 顶部数值平滑联动</div>
     </div>
   </div>
 

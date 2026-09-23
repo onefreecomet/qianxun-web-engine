@@ -449,6 +449,25 @@ class APIClient:
             )
         return resp.json()
 
+    def get_super_selection(self, params: dict) -> dict | list:
+        """SA 预筛：GET /simulations/super-selection（project033 实测端点）。
+
+        params 常见键：selection / region / delay / instrumentType /
+        selectionLimit / selectionHandling。计算中（Retry-After）或空体返回 {}，
+        由上层按「未知 → 放行」处理；响应形状（count/results/裸数组）由
+        super_channel.parse_prescreen_count 兼容解析。
+        """
+        resp = self._request_with_retry(
+            "GET", "/simulations/super-selection",
+            params=params, op_name="super_selection",
+        )
+        if self._parse_retry_after(resp.headers.get("Retry-After")) is not None:
+            return {}
+        try:
+            return resp.json() or {}
+        except ValueError:
+            return {}
+
     # -------- alphas --------
 
     def get_alphas(

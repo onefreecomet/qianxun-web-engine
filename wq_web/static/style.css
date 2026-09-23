@@ -8,8 +8,15 @@
   --border: #232B36;
   --border-2: #2a3349;
   --text: #C2CBD8;
-  --text-dim: #7E8A9C;
-  --text-mute: #4D5765;
+  /* 二级 / 三级文字色。原为 #7E8A9C / #4D5765，全站对比度实测仅 2.16~2.66:1，
+     远低于 WCAG AA 的 4.5:1（用户反馈「日期等文字看不清」）。2026-09-21 分两步抬高：
+     ① 先抬到 #93A5BE / #8496B0 解决「看不清」；② 复测发现 mute 档在最亮的深色底
+        （#202134 等按钮底）只剩 5.05:1、余量仅 +12%，故整档再上移一档至
+        dim #9AAEC7 / mute #8C9FB9：最差 5.63:1（余量 +25%），
+        且 dim/mute 亮度比 1.218 与初版 1.234 基本一致，层次关系不变。
+     注：两者也用于圆点/滚动条/边框等装饰，同值抬亮无副作用。 */
+  --text-dim: #9AAEC7;
+  --text-mute: #8C9FB9;
   --accent: #22D3EE;
   --accent-2: #F5B544;
   --accent-3: #34d399;
@@ -69,20 +76,42 @@ body::before {
   display: inline-flex; align-items: center; gap: 6px;
   color: var(--text-dim); text-decoration: none; font: 500 13px var(--sans);
   padding: 0 16px; height: 56px; border-bottom: 2px solid transparent;
+  white-space: nowrap;
 }
+/* 点过的链接不能出现浏览器默认下划线（独立页入口点过一次就会带上） */
+.anchors a:visited,
+.anchors a:link { text-decoration: none; }
 .anchors a:hover { color: var(--text); }
 .anchors a.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* 跳出到独立页的入口：用琥珀色区分，并给一个和 .kbd 同尺寸的外链徽章，
+   使整条导航「主文字 + 右侧徽章」的结构完全一致。 */
 .anchors a.sim-link {
   color: var(--accent-2);
   border-bottom-color: transparent;
 }
 .anchors a.sim-link:hover { color: #fde68a; }
+.anchors a.sim-link:hover .kbd-ext {
+  background: rgba(245,181,68,0.18); color: #fde68a;
+}
+.anchors a.sim-link.active { border-bottom-color: var(--accent-2); }
+
+/* 徽章：两类导航项共用同一套尺寸/字体/圆角，只靠内容区分语义 */
 .kbd {
-  display: inline-block; padding: 2px 6px;
-  background: var(--bg-3); border-radius: 3px;
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 20px; height: 18px; padding: 0 6px;
+  background: var(--bg-3); border-radius: 4px;
   font: 500 11px var(--mono); color: var(--text-mute);
+  line-height: 1; flex: none;
+}
+/* 外链徽章：语义为「在新标签页打开」，与数字徽章同尺寸 */
+.kbd-ext {
+  background: var(--signal-2-soft); color: var(--accent-2);
+  font-size: 12px; padding: 0 5px;
 }
 .anchors a.active .kbd { background: rgba(56,189,248,0.15); color: var(--accent); }
+/* 外链项激活时保持琥珀色，不被上面的青色规则覆盖 */
+.anchors a.sim-link.active .kbd-ext { background: rgba(245,181,68,0.18); color: var(--accent-2); }
 
 .topbar-right { margin-left: auto; display: flex; align-items: center; gap: 14px; }
 .quota-card {
@@ -96,6 +125,11 @@ body::before {
 .quota-label { font: 500 11px var(--mono); color: var(--text-mute); text-transform: uppercase; letter-spacing: 1px; }
 .quota-value { font: 700 16px var(--mono); color: var(--accent); font-variant-numeric: tabular-nums; }
 .quota-sub { font: 500 12px var(--mono); color: var(--text-mute); }
+
+/* 配额快照已过期（跨过平台重置点）：灰化 + 去发光，避免旧数字被当成真值 */
+.quota-card.stale { border-color: var(--text-mute); opacity: 0.75; }
+.quota-card.stale .quota-value { color: var(--text-mute); }
+.quota-card.stale .quota-ring-fg { stroke: var(--text-mute); filter: none; }
 .ws { display: flex; align-items: center; gap: 6px; font: 500 12px var(--mono); color: var(--text-dim); }
 .ws-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); box-shadow: 0 0 12px var(--good); animation: pulse 2s infinite; }
 .ws-indicator { font-size: 14px; color: var(--text-mute); transition: color 0.2s; }
@@ -176,6 +210,46 @@ main { position: relative; z-index: 1; max-width: 1400px; margin: 0 auto; paddin
 .live-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-mute); }
 .live-tag.on .live-dot { background: var(--good); box-shadow: 0 0 8px var(--good); animation: pulse 1.4s infinite; }
 .card-body { padding: 18px; position: relative; z-index: 1; }
+
+/* ===== PnL 卡：填满同排行高 + 底部直达条 ===== */
+/* 这张卡是 .g-2-1 的 1fr 列，内容比左侧「并发设置」矮。两种直觉做法都不好看：
+   ① 让 grid 拉伸卡片（默认行为）→ 卡底空出一大块，空白被边框圈住，像没做完；
+   ② 让卡片按内容自适应高度（align-self:start）→ 空洞只是跑到卡外，右列底部短一截。
+   这里用第三种：卡片照旧等高，把富余高度交给仪表盘那一行（.sync-flex 撑开 + 垂直居中），
+   空白被摊进仪表盘区的上下留白里。实测三种排法：只有这种「卡内空洞 0 且与左卡齐底」。
+   注意：左卡高度受 #promptList 的 max-height:220px 约束，不会无限增长，所以这里够稳。 */
+.card-pnl { display: flex; flex-direction: column; }
+.card-pnl > .card-body { flex: 1; display: flex; flex-direction: column; }
+.card-pnl .sync-flex { flex: 1; align-items: center; }
+
+/* 直达条：卡的直接子元素，横跨卡宽、贴卡底，被 .card 的 overflow:hidden 裁出圆角 */
+.quick-link-bar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-2);
+  text-decoration: none; color: var(--text);
+  position: relative; z-index: 1;
+  transition: background 0.15s var(--ease);
+}
+.quick-link-bar:hover { background: var(--bg-3); }
+.quick-link-mark {
+  width: 26px; height: 26px; flex: none; display: grid; place-items: center;
+  border-radius: 7px; font: 700 11px var(--mono); color: var(--accent);
+  background: var(--signal-soft); border: 1px solid rgba(34,211,238,0.22);
+  transition: box-shadow 0.15s var(--ease);
+}
+.quick-link-bar:hover .quick-link-mark { box-shadow: 0 0 12px rgba(34,211,238,0.28); }
+.quick-link-text { display: flex; flex-direction: column; min-width: 0; }
+.quick-link-name { font: 600 13px var(--sans); color: var(--text); transition: color 0.15s; }
+.quick-link-url {
+  font: 500 11px var(--mono); color: var(--text-dim);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.quick-link-go { margin-left: auto; color: var(--text-dim); transition: color 0.15s, transform 0.15s; }
+.quick-link-bar:hover .quick-link-name,
+.quick-link-bar:hover .quick-link-go { color: var(--accent); }
+.quick-link-bar:hover .quick-link-go { transform: translate(2px, -2px); }
 
 /* ===== Concurrency ===== */
 .conc-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 8px; }
@@ -338,6 +412,24 @@ tr.expr-detail-row td { padding: 0 14px 14px !important; background: var(--bg-1)
 .status-running { background: rgba(56,189,248,0.15); color: var(--accent); }
 .status-completed { background: rgba(52,211,153,0.15); color: var(--good); }
 .status-failed { background: rgba(244,63,94,0.15); color: var(--bad); }
+/* v82 Quick Simulate：QUICK 初筛批次徽章（FULL 批次不加徽章，保持旧观感） */
+.mode-badge { font: 600 10px var(--mono); padding: 2px 6px; border-radius: 4px; letter-spacing: 0.5px; }
+.mode-quick { background: rgba(245,181,68,0.15); color: var(--warn); }
+.mode-super { background: rgba(167,139,250,0.15); color: #b49ee6; }
+.mode-ra { background: rgba(56,189,248,0.15); color: var(--accent); }
+.mode-full { background: rgba(71,85,105,0.3); color: var(--text-dim); }
+/* v82 第三刀：QUICK→FULL 漏斗 + SuperAlpha 结构卡 */
+.funnel-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+.funnel-card { background: var(--bg-2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+.funnel-label { font-size: 12px; color: var(--text-dim); }
+.funnel-num { font: 700 22px var(--mono); color: var(--text); margin-top: 4px; }
+.funnel-note { font-size: 12px; color: var(--warn); margin-top: 4px; line-height: 1.5; }
+.funnel-link { display: block; font-size: 11px; color: var(--accent); margin-top: 4px; }
+.sa-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; }
+.sa-card { background: var(--bg-2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+.sa-label { font-size: 12px; color: var(--text-dim); margin-bottom: 6px; }
+.sa-expr { font: 12px/1.55 var(--mono); color: var(--text); white-space: pre-wrap;
+  word-break: break-all; margin: 0; max-height: 200px; overflow: auto; }
 
 /* ===== Forms ===== */
 textarea, input[type="text"], input[type="number"], select {
@@ -391,8 +483,8 @@ code { background: rgba(56,189,248,0.1); color: var(--accent); padding: 1px 6px;
 }
 @media (max-width: 720px) {
   .hero-stats { grid-template-columns: repeat(2, 1fr); }
-  .anchors { margin-left: 12px; }
-  .anchors a { padding: 0 10px; font-size: 13px; }
+  .anchors { margin-left: 12px; flex-wrap: wrap; }
+  .anchors a { padding: 0 10px; font-size: 13px; height: 44px; }
   .topbar-right .quota-card { display: none; }
 }
 @media (max-width: 600px) {
@@ -582,3 +674,907 @@ code { background: rgba(56,189,248,0.1); color: var(--accent); padding: 1px 6px;
 .osmosis-bar-super { background: linear-gradient(90deg, var(--accent-2), #f59e0b); }
 .osmosis-bar-score { width: 60px; text-align: right; color: var(--text); font-weight: 500; font-variant-numeric: tabular-nums; }
 .osmosis-bar-metric { width: 50px; text-align: right; font-variant-numeric: tabular-nums; }
+
+/* ===== AI 批次卡片：旋转渐变描边 + 底部呼吸弥散背光 ===== */
+.position-relative { position: relative; }
+
+.card-ai-glow {
+  border-radius: 14px;
+  isolation: isolate;
+}
+/* 旋转 conic 渐变描边：用 mask 镂空内部，仅留 1.5px 彩色边 */
+.card-ai-glow::before {
+  content: "";
+  position: absolute;
+  inset: -1.5px;
+  border-radius: inherit;
+  padding: 1.5px;
+  background: conic-gradient(from var(--aig-angle, 0deg),
+      #22d3ee, #6366f1, #a855f7, #22d3ee);
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask-composite: exclude;
+  animation: aiGlowSpin 5.5s linear infinite;
+  pointer-events: none;
+  z-index: 2;
+}
+/* 底部呼吸弥散背光（位于 card 外、section 内，不被 overflow 裁切） */
+.ai-glow-backdrop {
+  position: absolute;
+  left: 6%;
+  right: 6%;
+  bottom: -26px;
+  height: 100px;
+  border-radius: 50%;
+  background: radial-gradient(closest-side,
+      rgba(34,211,238,0.50),
+      rgba(99,102,241,0.26),
+      transparent 72%);
+  filter: blur(28px);
+  opacity: .6;
+  animation: aiGlowBreathe 4.2s ease-in-out infinite;
+  pointer-events: none;
+  z-index: 0;
+}
+@keyframes aiGlowSpin { to { --aig-angle: 360deg; } }
+@keyframes aiGlowBreathe {
+  0%, 100% { opacity: .42; transform: scale(1);    filter: blur(24px); }
+  50%      { opacity: .82; transform: scale(1.07); filter: blur(32px); }
+}
+/* 注册自定义属性，使 conic 角度可被动画驱动（Chrome/Edge/Safari/新版 Firefox 支持） */
+@property --aig-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+/* 不支持 @property 的浏览器：退回静态彩色描边 + 旋转光斑，保证视觉不塌 */
+@supports not (background: conic-gradient(from var(--aig-angle, 0deg), red, blue)) {
+  .card-ai-glow::before {
+    background: conic-gradient(#22d3ee, #6366f1, #a855f7, #22d3ee);
+    animation: none;
+  }
+}
+
+/* =====================================================================
+   首页顶栏指标卡 · 从 simulator 顶栏平移（Osmosis Rank / VF / Total Payment / Signals）
+   ---------------------------------------------------------------------
+   三档语义色沿用 simulator 的口径：
+     live  = BRAIN 实时拉取的真实数值（青）
+     sec   = 平台聚合/间接值（紫蓝）
+   尺寸：simulator 顶栏是紧凑横排（17px 数值），首页 hero-stats 每格 259px 宽
+   且与 h-stat 等高，故此处等比放大以免出现「卡内空洞」。
+   ===================================================================== */
+.gmetric {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 96px;
+  padding: 6px 14px 7px 14px;
+  background: linear-gradient(180deg, var(--bg-2), rgba(14,18,25,0.9));
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  transition: border-color .18s var(--ease), transform .18s var(--ease), box-shadow .18s var(--ease);
+}
+.gmetric::before {
+  content: '';
+  position: absolute; left: 0; top: 9px; bottom: 9px; width: 2px;
+  border-radius: 2px; background: var(--accent); opacity: 0.5;
+}
+.gmetric-live::before {
+  background: linear-gradient(180deg, var(--accent), #7ad9ec);
+  box-shadow: 0 0 8px rgba(34,211,238,0.55);
+  opacity: 0.95;
+}
+.gmetric-sec::before {
+  background: linear-gradient(180deg, #8B7BF0, #6E62D8);
+  opacity: 0.85;
+  box-shadow: 0 0 7px rgba(139,123,240,0.45);
+}
+.gmetric:hover {
+  border-color: rgba(34,211,238,0.4);
+  transform: translateY(-1px);
+  box-shadow: 0 8px 20px rgba(0,0,0,0.35);
+}
+.gmetric-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font: 600 9.5px var(--mono);
+  color: #8496B0;
+  text-transform: uppercase;
+  letter-spacing: 0.9px;
+  white-space: nowrap;
+}
+.gmetric-value {
+  font: 700 17px var(--display);
+  color: var(--text);
+  letter-spacing: -0.3px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  line-height: 1.15;
+}
+.gmetric-sec .gmetric-value {
+  color: #B9AEF7;
+  font-weight: 700;
+  font-size: 16px;
+}
+.gsrc {
+  font: 700 8.5px var(--mono);
+  font-style: normal;
+  line-height: 1;
+  color: #7C8CA4;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 3px;
+  cursor: help;
+}
+.gsrc-live {
+  color: #0A1122;
+  border-color: rgba(34,211,238,0.75);
+  background: var(--accent);
+}
+.gmetric-clickable { cursor: pointer; user-select: none; }
+.gmetric-clickable:hover {
+  border-color: rgba(34,211,238,0.45);
+  transform: translateY(-1px);
+  box-shadow: 0 8px 22px rgba(0,0,0,0.35);
+}
+.gmetric-clickable:focus-visible {
+  outline: 2px solid rgba(34,211,238,0.6);
+  outline-offset: 2px;
+}
+/* 角标箭头用内联 SVG（不用 ↗ 字符：该字体下无字形，headless 截图会看不到）
+   定位右下角：右上角被 BRAIN 来源徽标 B 占着，会重叠。 */
+.gmetric-clickable .gmetric-spark {
+  position: absolute;
+  bottom: 5px; right: 8px;
+  width: 11px; height: 11px;
+  opacity: 0.7;
+  background: no-repeat center / contain
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3.1 8.9 8.9 3.1M5 3.1h3.9v3.9' fill='none' stroke='%234D5765' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  transition: opacity .18s var(--ease), transform .18s var(--ease);
+}
+.gmetric-clickable:hover .gmetric-spark {
+  opacity: 1;
+  transform: translate(1px, -1px);
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3.1 8.9 8.9 3.1M5 3.1h3.9v3.9' fill='none' stroke='%2322D3EE' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
+/* ---------- 首页 hero-stats 场景：一体化仪表条（V5，2026-09-21 定稿） ----------
+   五格合并为一条，内部分隔线取代独立卡片；hover 时整格浅色高亮。
+   注意：窄屏换行会破坏「一条」的边框与分隔，故在 1100px 断点整体还原为独立卡片。 */
+.hero-stats {
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  overflow: hidden;
+  background: linear-gradient(180deg, var(--bg-2), rgba(14,18,25,0.9));
+  box-shadow: 0 8px 22px rgba(0,0,0,0.28);
+}
+.hero-stats .gmetric {
+  justify-content: center;
+  gap: 5px;
+  min-width: 0;
+  min-height: 78px;
+  padding: 16px 20px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.hero-stats .gmetric + .gmetric { border-left: 1px solid var(--border); }
+.hero-stats .gmetric::before { display: none; }
+.hero-stats .gmetric-label { font-size: 13.5px; letter-spacing: 0.7px; color: #9DB0C8; }
+.hero-stats .gmetric-value { font-size: 32px; }
+.hero-stats .gmetric-sec .gmetric-value { font-size: 30px; }
+.hero-stats .gmetric .gsrc { font-size: 10.5px; padding: 1.5px 5px; }
+/* 可点击提示：右下角箭头用语义色（实时类=青 / 聚合类=紫），不可点击的两格没有箭头。
+   原先箭头描边是 #4D5765，深底上几乎不可读，等于没有提示（2026-09-21 修正）。 */
+.hero-stats .gmetric-clickable .gmetric-spark {
+  width: 15px; height: 15px;
+  bottom: 12px; right: 14px;
+  opacity: 0.85;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3.1 8.9 8.9 3.1M5 3.1h3.9v3.9' fill='none' stroke='%2322D3EE' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+.hero-stats .gmetric-sec.gmetric-clickable .gmetric-spark {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3.1 8.9 8.9 3.1M5 3.1h3.9v3.9' fill='none' stroke='%238B7BF0' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+.hero-stats .gmetric-clickable:hover .gmetric-spark {
+  opacity: 1;
+  transform: translate(1px, -1px);
+}
+.hero-stats .gmetric-sec.gmetric-clickable:hover .gmetric-spark {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3.1 8.9 8.9 3.1M5 3.1h3.9v3.9' fill='none' stroke='%238B7BF0' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+.hero-stats .gmetric:hover {
+  transform: none;
+  box-shadow: none;
+  border-color: var(--border);
+  background: rgba(34,211,238,0.045);
+}
+.hero-stats .gmetric-sec:hover { background: rgba(139,123,240,0.06); }
+.hero-stats .gmetric:nth-child(1) { animation: riseIn .5s var(--ease) .03s backwards; }
+.hero-stats .gmetric:nth-child(2) { animation: riseIn .5s var(--ease) .08s backwards; }
+.hero-stats .gmetric:nth-child(3) { animation: riseIn .5s var(--ease) .13s backwards; }
+.hero-stats .gmetric:nth-child(4) { animation: riseIn .5s var(--ease) .18s backwards; }
+.hero-stats .gmetric:nth-child(5) { animation: riseIn .5s var(--ease) .23s backwards; }
+
+/* 窄屏换行：还原为独立卡片，否则一体条的边框/分隔线会错位 */
+@media (max-width: 1100px) {
+  .hero-stats {
+    gap: 12px;
+    border: none;
+    border-radius: 0;
+    overflow: visible;
+    background: transparent;
+    box-shadow: none;
+  }
+  .hero-stats .gmetric {
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    min-height: 94px;
+    background: linear-gradient(180deg, var(--bg-2), rgba(14,18,25,0.9));
+  }
+  .hero-stats .gmetric + .gmetric { border-left: 1px solid var(--border); }
+  .hero-stats .gmetric::before { display: block; }
+  .hero-stats .gmetric:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 8px 20px rgba(0,0,0,0.35);
+    border-color: rgba(34,211,238,0.4);
+    background: linear-gradient(180deg, var(--bg-2), rgba(14,18,25,0.9));
+  }
+}
+
+
+/* =====================================================================
+   以下为从 simulator.css 平移的三套指标弹窗样式
+   （日渗透分趋势 / 已提交 Alpha 清单 / 每日 Base Payment）
+   ===================================================================== */
+/* =====================================================================
+   v82 · 日渗透分趋势弹窗
+   入口：顶部 Osmosis Rank 指标卡（可点击）→ 全屏遮罩 + 深蓝渐变卡片
+   ===================================================================== */
+
+/* ---------- 1. 可点击的指标卡 ---------- */
+.gmetric-clickable {
+  cursor: pointer;
+  user-select: none;
+}
+.gmetric-clickable:hover {
+  border-color: rgba(34,211,238,0.45);
+  transform: translateY(-1px);
+  box-shadow: 0 8px 22px rgba(0,0,0,0.35);
+}
+.gmetric-clickable:focus-visible {
+  outline: 2px solid rgba(34,211,238,0.6);
+  outline-offset: 2px;
+}
+/* 角标箭头用内联 SVG（不用 ↗ 字符：该字体下无字形，headless 截图会看不到）
+   定位在右下角而不是右上角：右上角被 BRAIN 来源徽标 B 占着，会重叠。 */
+.gmetric-clickable .gmetric-spark {
+  position: absolute;
+  bottom: 5px; right: 8px;
+  width: 11px; height: 11px;
+  opacity: 0.7;
+  background: no-repeat center / contain
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3.1 8.9 8.9 3.1M5 3.1h3.9v3.9' fill='none' stroke='%234D5765' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  transition: opacity .18s var(--ease), transform .18s var(--ease);
+}
+.gmetric-clickable:hover .gmetric-spark {
+  opacity: 1;
+  transform: translate(1px, -1px);
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3.1 8.9 8.9 3.1M5 3.1h3.9v3.9' fill='none' stroke='%2322D3EE' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
+/* ---------- 2. 遮罩与卡片 ---------- */
+.osm-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 400;
+  display: grid;
+  place-items: center;
+  padding: 22px;
+}
+.osm-modal[hidden] { display: none; }
+
+.osm-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(4, 7, 12, 0.74);
+  backdrop-filter: blur(6px);
+  animation: osmFade .18s var(--ease);
+}
+
+.osm-modal-card {
+  position: relative;
+  width: min(900px, 96vw);
+  max-height: 92vh;
+  overflow-y: auto;
+  padding: 24px 28px 20px;
+  border-radius: 22px;
+  background:
+    radial-gradient(760px 340px at 10% -12%, rgba(34,211,238,0.10), transparent 62%),
+    radial-gradient(620px 300px at 96% 4%, rgba(245,181,68,0.05), transparent 58%),
+    linear-gradient(180deg, #111d38 0%, #0c1428 62%, #0a1122 100%);
+  border: 1px solid rgba(72,124,205,0.30);
+  box-shadow:
+    0 34px 90px rgba(0,0,0,0.62),
+    inset 0 1px 0 rgba(140,190,255,0.10);
+  animation: osmRise .24s var(--ease);
+}
+.osm-modal-card::-webkit-scrollbar { width: 8px; }
+.osm-modal-card::-webkit-scrollbar-thumb {
+  background: rgba(120,160,220,0.22);
+  border-radius: 8px;
+}
+
+.osm-modal-close {
+  position: absolute;
+  top: 14px; right: 16px;
+  width: 30px; height: 30px;
+  display: grid; place-items: center;
+  font-size: 19px;
+  line-height: 1;
+  color: var(--text-dim);
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(120,160,220,0.20);
+  border-radius: 9px;
+  cursor: pointer;
+  transition: color .16s var(--ease), background .16s var(--ease), border-color .16s var(--ease);
+}
+.osm-modal-close:hover {
+  color: #fff;
+  background: rgba(251,113,133,0.16);
+  border-color: rgba(251,113,133,0.42);
+}
+
+/* ---------- 3. 标题区 ---------- */
+.osm-modal-head { text-align: center; margin-bottom: 10px; }
+.osm-modal-eyebrow {
+  display: inline-block;
+  padding: 2px 10px;
+  margin-bottom: 8px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+  color: var(--accent);
+  background: rgba(34,211,238,0.09);
+  border: 1px solid rgba(34,211,238,0.26);
+  border-radius: 999px;
+}
+.osm-modal-title {
+  font-family: var(--display);
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  color: #EAF2FF;
+}
+.osm-modal-sub {
+  margin-top: 5px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+/* ---------- 4. 图表 ---------- */
+.osm-chart-wrap { margin: 4px 0 2px; }
+#osmChart {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.osm-grid-line { stroke: rgba(122,158,214,0.16); stroke-width: 1; }
+.osm-axis-text {
+  fill: #6E7F9C;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.osm-axis-text.is-latest { fill: #9FC4F5; font-weight: 600; }
+.osm-line {
+  fill: none;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: url(#osmLineGlow);
+}
+.osm-dot-halo { fill: rgba(96,165,250,0.30); }
+.osm-dot-ring { fill: #0B1425; stroke: rgba(147,197,253,0.85); stroke-width: 1.4; }
+.osm-dot-core { fill: #FFFFFF; }
+.osm-empty-text {
+  fill: #6E7F9C;
+  font-family: var(--sans);
+  font-size: 14px;
+  text-anchor: middle;
+}
+
+/* ---------- 5. 底部统计 ---------- */
+.osm-modal-foot {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-top: 14px;
+}
+.osm-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 9px 12px;
+  background: rgba(9,16,32,0.62);
+  border: 1px solid rgba(72,124,205,0.20);
+  border-radius: 12px;
+}
+.osm-stat-label {
+  font-size: 10.5px;
+  letter-spacing: 0.8px;
+  color: var(--text-mute);
+}
+.osm-stat-value {
+  font-family: var(--mono);
+  font-size: 17px;
+  font-weight: 600;
+  color: #DCE9FF;
+}
+
+.osm-modal-note {
+  margin-top: 12px;
+  padding: 9px 12px;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-dim);
+  background: rgba(34,211,238,0.055);
+  border-left: 2px solid rgba(34,211,238,0.45);
+  border-radius: 0 8px 8px 0;
+}
+.sig-note-list {
+  margin: 7px 0 2px;
+  padding-left: 18px;
+}
+.sig-note-list li {
+  margin: 3px 0;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+.sig-note-list b {
+  color: #EAF2FF;
+  font-family: var(--mono);
+  font-weight: 700;
+}
+
+@keyframes osmFade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes osmRise {
+  from { opacity: 0; transform: translateY(14px) scale(.985); }
+  to { opacity: 1; transform: none; }
+}
+
+/* =====================================================================
+   已提交 Alpha 清单弹窗（Signals 卡片）
+   复用 .osm-modal 骨架，这里只补工具栏 / 表格 / 分页
+   ===================================================================== */
+
+.osm-modal-card-wide {
+  width: min(1320px, 97vw);
+  overflow-x: hidden;   /* 表格自己滚，卡片不横溢 */
+}
+
+/* ---------- 工具栏 ---------- */
+.sig-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 14px 0 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(72,124,205,0.18);
+}
+
+.sig-filters { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.sig-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.4px;
+  color: var(--text-dim);
+  background: rgba(9,16,32,0.60);
+  border: 1px solid rgba(72,124,205,0.20);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: color .15s var(--ease), background .15s var(--ease), border-color .15s var(--ease);
+}
+.sig-chip:hover { color: #DCE9FF; border-color: rgba(72,124,205,0.42); }
+.sig-chip.active {
+  color: #EAF2FF;
+  background: rgba(34,211,238,0.13);
+  border-color: rgba(34,211,238,0.45);
+}
+.sig-chip-count {
+  font-size: 10px;
+  color: var(--text-mute);
+}
+.sig-chip.active .sig-chip-count { color: #7FE3F5; }
+
+.sig-toolbar-right { display: flex; align-items: center; gap: 8px; }
+
+.sig-search {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  height: 30px;
+  background: rgba(9,16,32,0.60);
+  border: 1px solid rgba(72,124,205,0.20);
+  border-radius: 9px;
+  transition: border-color .15s var(--ease);
+}
+.sig-search:focus-within { border-color: rgba(34,211,238,0.45); }
+.sig-search .ico { width: 13px; height: 13px; color: var(--text-mute); flex: none; }
+.sig-search input {
+  width: 190px;
+  height: 100%;
+  font-family: var(--sans);
+  font-size: 12px;
+  color: #DCE9FF;
+  background: none;
+  border: none;
+  outline: none;
+}
+.sig-search input::placeholder { color: var(--text-mute); }
+
+.sig-select {
+  height: 30px;
+  padding: 0 8px;
+  font-family: var(--sans);
+  font-size: 12px;
+  color: #DCE9FF;
+  background: rgba(9,16,32,0.60);
+  border: 1px solid rgba(72,124,205,0.20);
+  border-radius: 9px;
+  outline: none;
+  cursor: pointer;
+}
+.sig-select:focus { border-color: rgba(34,211,238,0.45); }
+
+.sig-btn {
+  height: 30px;
+  padding: 0 14px;
+  font-family: var(--sans);
+  font-size: 12px;
+  color: #DCE9FF;
+  background: rgba(9,16,32,0.60);
+  border: 1px solid rgba(72,124,205,0.20);
+  border-radius: 9px;
+  outline: none;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background .15s, opacity .15s, border-color .15s;
+}
+.sig-btn:hover { background: rgba(34,211,238,0.12); border-color: rgba(34,211,238,0.45); }
+.sig-btn:disabled { opacity: .5; cursor: default; }
+
+/* ---------- 表格 ---------- */
+.sig-table-wrap {
+  position: relative;
+  max-height: 56vh;
+  overflow: auto;
+  border: 1px solid rgba(72,124,205,0.16);
+  border-radius: 12px;
+}
+.sig-table-wrap::-webkit-scrollbar { width: 9px; height: 9px; }
+.sig-table-wrap::-webkit-scrollbar-thumb {
+  background: rgba(120,160,220,0.22);
+  border-radius: 8px;
+}
+
+.sig-table {
+  width: 100%;
+  /* 表头字号放大后列宽总额变大；给足下限让设置列和金字塔列都有空间。
+     1280px 会超出卡片内宽（状态列被裁且横向滚动条不在视野内），收到 1180px 刚好放下 */
+  min-width: 1180px;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 12px;
+  table-layout: auto;
+}
+.sig-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 9px 9px;
+  text-align: left;
+  font-family: var(--sans);
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  /* 表头必须比正文更醒目：原为 --text-mute(#4D5765)，深底上几乎看不清 */
+  color: #A7BAD6;
+  white-space: nowrap;
+  background: #131F38;
+  border-bottom: 1.5px solid rgba(72,124,205,0.42);
+  box-shadow: 0 1px 0 rgba(0,0,0,0.35);   /* 与数据行拉开层次，滚动时更清楚 */
+}
+/* 数值列表头用青色，和左半边的文字列区分开 */
+.sig-table thead th.sig-th-num { color: #7FD8EC; }
+.sig-table thead th.sig-th-py { color: #E8B95C; }
+/* ID 列给足宽度，避免表头 "ALPHA ID" 被挤断 */
+.sig-table th.sig-th-id, .sig-table td:first-child { min-width: 86px; }
+/* 设置列给足宽度：内容最长实测需 ~221px，加 padding 后列宽钉在 250px */
+.sig-table th:nth-child(4), .sig-table td:nth-child(4) { min-width: 250px; width: 250px; }
+/* 金字塔列富余最多（实测占 263px 但内容不足），收紧后把空间让给设置列 */
+.sig-table th:nth-child(10), .sig-table td:nth-child(10) { max-width: 235px; }
+.sig-th-num, .sig-th-py { text-align: right !important; }
+.sig-table thead th:nth-child(11) { text-align: right; }
+
+.sig-table tbody tr {
+  transition: background .12s var(--ease);
+}
+.sig-table tbody tr:nth-child(even) { background: rgba(255,255,255,0.014); }
+.sig-table tbody tr:hover { background: rgba(34,211,238,0.055); }
+.sig-table tbody td {
+  padding: 6px 9px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  border-bottom: 1px solid rgba(72,124,205,0.09);
+  vertical-align: middle;
+}
+.sig-table tbody tr:last-child td { border-bottom: none; }
+.sig-table tbody td.sig-settings-cell,
+.sig-table tbody td.sig-td-py { white-space: normal; }
+
+/* ID 列：等宽 + 可点 */
+.sig-id {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: #9FC4F5;
+  text-decoration: none;
+  border-bottom: 1px dotted rgba(159,196,245,0.45);
+}
+.sig-id:hover { color: #EAF2FF; border-bottom-color: #EAF2FF; }
+
+/* 数字列 */
+.sig-num {
+  font-family: var(--mono);
+  font-size: 12px;
+  text-align: right;
+  color: #DCE9FF;
+}
+/* 日期列（提交日）与缺失值：原用 --text-mute(#4D5765)，在弹窗渐变底上实测对比度仅
+   2.33:1，远低于 WCAG AA 的 4.5:1，肉眼几乎读不出（2026-09-21 用户反馈后修）。
+   现用 --text-dim（#93A5BE，实测 6.8:1），清晰可读且仍弱于指标数字(#DCE9FF)以保留主次。 */
+.sig-num.dim { color: var(--text-dim); }
+.sig-num.good { color: #5EE9B5; }
+.sig-num.warn { color: #F5B544; }
+.sig-num.bad { color: #FB7185; }
+
+/* 区域与状态徽章 */
+.sig-region {
+  display: inline-block;
+  padding: 2px 7px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.5px;
+  color: #C7DBFF;
+  background: rgba(72,124,205,0.16);
+  border: 1px solid rgba(72,124,205,0.30);
+  border-radius: 6px;
+}
+
+.sig-status {
+  display: inline-block;
+  padding: 2px 7px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.5px;
+  border-radius: 6px;
+}
+.sig-status.is-active { color: #5EE9B5; background: rgba(94,233,181,0.10); border: 1px solid rgba(94,233,181,0.30); }
+.sig-status.is-decom  { color: #9AA9C2; background: rgba(154,169,194,0.10); border: 1px solid rgba(154,169,194,0.26); }
+
+/* 设置列：单行紧凑展示，超宽靠 title 兜底。
+   max-width 必须跟着列宽走 —— 之前写死 200px，而列宽 236px，
+   单元格可用 218px，导致 30/50 行被无谓省略。 */
+.sig-settings {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--text-mute);
+}
+.sig-settings .sep { color: rgba(122,158,214,0.45); }
+
+/* 金字塔列：限制宽度 + 允许换行，但不至于撑成多行 */
+.sig-table td.sig-td-py { max-width: 250px; }
+
+/* 金字塔标签：单行显示，超出用「+N」折叠，避免多标签把行高撑成 4 行 */
+.sig-py-wrap {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  gap: 4px;
+  align-items: center;
+  justify-content: flex-end;
+  vertical-align: middle;
+}
+.sig-py {
+  display: inline-block;
+  padding: 2px 6px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+  color: #F5B544;
+  background: rgba(245,181,68,0.10);
+  border: 1px solid rgba(245,181,68,0.30);
+  border-radius: 6px;
+}
+.sig-py .mult { color: #FCD34D; opacity: 0.85; margin-left: 2px; }
+.sig-py-more {
+  display: inline-block;
+  padding: 2px 6px;
+  font-family: var(--mono);
+  font-size: 10px;
+  white-space: nowrap;
+  color: var(--text-mute);
+  background: rgba(120,160,220,0.10);
+  border: 1px solid rgba(120,160,220,0.22);
+  border-radius: 6px;
+  cursor: help;
+}
+.sig-py-none { font-size: 11px; color: var(--text-mute); }
+
+/* 区域/状态/金字塔列宽收窄，把空间让给指标列 */
+.sig-table th:nth-child(3), .sig-table td:nth-child(3),
+.sig-table th:nth-child(11), .sig-table td:nth-child(11) { width: 1%; }
+.sig-td-py { text-align: right; white-space: nowrap; }
+
+.sig-loading {
+  padding: 34px 0;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-mute);
+}
+.sig-loading[hidden] { display: none; }
+
+/* ---------- 分页 ---------- */
+.sig-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+.sig-pager:empty { display: none; }
+.sig-page-btn {
+  min-width: 30px;
+  height: 28px;
+  padding: 0 9px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--text-dim);
+  background: rgba(9,16,32,0.60);
+  border: 1px solid rgba(72,124,205,0.20);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: color .14s var(--ease), background .14s var(--ease), border-color .14s var(--ease);
+}
+.sig-page-btn:hover:not(:disabled) { color: #EAF2FF; border-color: rgba(72,124,205,0.45); }
+.sig-page-btn.active {
+  color: #0A1122;
+  font-weight: 700;
+  background: #48B8E0;
+  border-color: #48B8E0;
+}
+.sig-page-btn:disabled { opacity: 0.38; cursor: not-allowed; }
+.sig-page-info {
+  margin-left: 6px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-mute);
+}
+
+@media (max-width: 720px) {
+  .osm-modal-card { padding: 20px 16px 16px; border-radius: 18px; }
+  .osm-modal-foot { grid-template-columns: repeat(2, 1fr); }
+  .osm-modal-title { font-size: 18px; }
+  .sig-toolbar { flex-direction: column; align-items: stretch; }
+  .sig-toolbar-right { flex-wrap: wrap; }
+  .sig-search { flex: 1 1 100%; }
+  .sig-search input { width: 100%; }
+  .sig-table-wrap { max-height: 48vh; }
+}
+
+/* ===== Total Payment 弹窗（base-payment 折线图） ===== */
+.pay-odometer {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 16px 4px 8px;
+}
+.pay-odo-main {
+  display: flex;
+  align-items: baseline;
+  color: #fbbf24;
+  font-weight: 700;
+  line-height: 1;
+}
+.pay-odo-cur { font-size: 22px; margin-right: 2px; opacity: .82; }
+.pay-odo-val {
+  font-size: 46px;
+  font-family: var(--mono);
+  letter-spacing: -.5px;
+  font-variant-numeric: tabular-nums;
+}
+.pay-odo-date { color: var(--text-mute); font-size: 14px; }
+.pay-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  padding: 4px 4px 12px;
+  font-size: 14px;
+  color: #cdd9ec;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+.pay-summary b { color: #e6edf3; font-family: var(--mono); font-weight: 600; }
+.pay-summary .pay-sum-total b { color: #22d3ee; }
+.pay-chart-wrap {
+  overflow-x: auto;
+  overflow-y: hidden;
+  margin-top: 10px;
+  cursor: grab;
+  border-radius: 10px;
+  background: rgba(9,16,32,0.35);
+}
+.pay-chart-wrap:active { cursor: grabbing; }
+.pay-chart { display: block; }
+.pay-hint {
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--text-mute);
+  text-align: center;
+}
+
+/* 双图表横向滑动容器（两 canvas 同宽，共享 scrollLeft 对齐） */
+.pay-charts {
+  overflow-x: auto;
+  overflow-y: hidden;
+  margin-top: 10px;
+  cursor: default;
+  border-radius: 10px;
+  background: rgba(9,16,32,0.35);
+}
+.pay-charts:active { cursor: grabbing; }
+.pay-chart-block { padding: 4px 0; }
+.pay-chart-block + .pay-chart-block { border-top: 1px solid rgba(255,255,255,0.05); }
+.pay-chart-label {
+  font-size: 14px;
+  color: var(--text-mute);
+  padding: 6px 8px 2px;
+  letter-spacing: .3px;
+}
+.pay-chart { display: block; cursor: crosshair; }
+.pay-chart-sub { background: rgba(72,124,205,0.04); }
+.pay-odo-meta { display: flex; flex-direction: column; gap: 2px; }
+.pay-odo-sub { color: #cdd9ec; font-size: 15px; }
+.pay-odo-sub b {
+  color: #48B8E0;
+  font-family: var(--mono);
+  font-size: 17px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+

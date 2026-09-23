@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import re
 import subprocess
@@ -26,6 +27,8 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+
+log = logging.getLogger("qianxun.mcp")
 
 # 让脚本既能 python -m wq_engine.mcp_server 也能 python wq_engine/mcp_server.py 跑
 if __package__ in (None, ""):
@@ -40,6 +43,17 @@ except ImportError:  # pragma: no cover - 兼容某些环境下的别名
 from wq_engine.api.config import BrainConfig  # noqa: E402
 from wq_engine.api.client import APIClient  # noqa: E402
 from wq_engine.storage.database import Storage, expression_key  # noqa: E402
+from wq_engine.scheduler.ra_common import (  # noqa: E402
+    is_ra_batch as _is_ra_batch,
+    ra_settings as _ra_settings,
+    ra_backfill_one,
+    row_is_ra,
+)
+from wq_engine.scheduler.super_channel import (  # noqa: E402
+    is_super_batch as _is_super_batch,
+    submit_super_batch as _submit_super_batch,
+    super_todo,
+)
 from wq_engine.scheduler.runner import BatchScheduler  # noqa: E402
 
 
@@ -188,7 +202,40 @@ DEFAULT_SETTINGS = {
 def _normalize_settings(s: dict) -> dict:
     out = dict(DEFAULT_SETTINGS)
     out.update({k: v for k, v in s.items() if v is not None})
+    # v82 Quick Simulate（平台 260921 上线）：simulationMode 只接受 QUICK / FULL。
+    # FULL = 平台默认 → 从 settings 里剔除，保证发给平台的 payload 与历史版本
+    # 逐字节一致（expr_key 哈希、老批次去重都不受影响）；QUICK 原样透传。
+    # 非法值直接抛错，上层（MCP/web）转成用户可读的错误信息。
+    mode = out.pop("simulationMode", None)
+    if mode is not None:
+        mode = str(mode).strip().upper()
+        if mode not in ("QUICK", "FULL"):
+            raise ValueError(
+                f"simulationMode 非法：{mode!r}，只支持 QUICK（初筛）或 FULL（完整回测）"
+            )
+        if mode == "QUICK":
+            out["simulationMode"] = "QUICK"
     return out
+
+
+def _sim_mode_of(settings: dict) -> str:
+    """settings → 批次模式（QUICK / FULL）。FULL 已被 _normalize_settings 剔除。"""
+    return "QUICK" if settings.get("simulationMode") == "QUICK" else "FULL"
+
+
+def _quick_mode_block_reason(expressions: list, settings: dict) -> str:
+    """QUICK 模式暂不支持的批次形态 → 返回拦截原因；支持则返回空串。
+
+    平台 QUICK Mode 官方示例只给了 REGULAR（帖 43668784587031），
+    SUPER×QUICK、RA×QUICK 均未证实 —— 未经实测不放出去烧配额（260923 纪律）。
+    """
+    if _sim_mode_of(settings) != "QUICK":
+        return ""
+    if _is_super_batch(expressions):
+        return "QUICK 模式暂只支持 REGULAR 批次（SUPER × QUICK 平台未证实，待实测后放开）"
+    if _is_ra_batch(expressions, settings):
+        return "QUICK 模式暂只支持 REGULAR 批次（RA × QUICK 平台未证实，待实测后放开）"
+    return ""
 
 
 def _event_cb(events: list):
@@ -197,6 +244,18 @@ def _event_cb(events: list):
         events.append((event, payload))
     return cb
 
+
+# ---------------- SUPER（SuperAlpha）专用通道 ----------------
+# v82：实现已抽出为公共模块 wq_engine/scheduler/super_channel.py（MCP 与 web 共用），
+# 本文件顶部以 _is_super_batch / _submit_super_batch 别名导入，此处不再重复实现。
+# 相对 260921 原版的增强：selection+combo+settings 去重（alphas.expr_key）、
+# 预筛组件 <10 自动跳过、并发 3 分波投、进度事件回调。
+
+# ---------------- RA（Region Agnostic / ARC2026）----------------
+# v83（260923）：RA 已**原生内建** BatchScheduler（冰神质询「必须走旁路吗」后的
+# 工程裁定）—— 入口在此幂等修正 settings，payload type 由 runner 按 region=ALL
+# 推导，回填自动收 Child（ra_common.ra_backfill_one）。本地旁路实现已删除；
+# SUPER 因 payload 无 regular 字段仍走 super_channel 旁路。
 
 # ---------------- MCP Server ----------------
 
@@ -237,7 +296,25 @@ def qianxun_status(batch_no: str = "") -> str:
     description=(
         "提交一批表达式回测。输入 JSON 路径（必须是 {settings, expressions[]} 格式），"
         "自动建批次号 B+YYYYMMDD-NNN，去重已回测过的表达式，自动回填 alpha 详情入库。"
-        "batch_size 默认 8、concurrent 默认 3（与 v66 GUI 一致）。返回批次号与提交状态。"
+        "batch_size 默认 8、concurrent 默认 3（与 v66 GUI 一致）。"
+        "expressions 元素支持三种形态："
+        "① REGULAR —— {slot?, expression, decay?}；"
+        "② SUPER（SuperAlpha）—— {selection, combo}，检测到即整批走 SUPER 独立通道，"
+        "payload 为 {type:SUPER, settings, selection, combo}；按 selection+combo+settings "
+        "去重（alphas.expr_key）、预筛组件 <10 自动跳过、并发 ≤3 分波投（v82 起）；"
+        "combo 语法坑（260923 实测）：不支持 f(x).y 链式取属性，"
+        "如 ts_ir(generate_stats(alpha).returns,250) 会报 \"Unexpected character '.'\"，"
+        "必须先 stats=generate_stats(alpha); 赋值再用 stats.returns，"
+        "或直接用平台内置 combo_a(alpha)；"
+        "③ RA（Region Agnostic Alpha / ARC2026）—— settings.region=ALL（或元素带 "
+        "type:REGION_AGNOSTIC / region_agnostic:true）。v83（260923）起**原生走通用批次流**："
+        "runner 自动推导 payload type=REGION_AGNOSTIC、强制单条成批、轮询预算 4200s，"
+        "入口幂等修正 delay=1、universe∈LARGE|MEDIUM|SMALL、ALL 下 COUNTRY→STATISTICAL；"
+        "RA Parent 自身无指标，回填入库的是各区域 RA Child（type='RA'），响应带 mode/parents。"
+        "④ settings 支持 simulationMode: \"QUICK\"（Quick Simulate 初筛，平台 260921 上线）——"
+        "只允许 REGULAR 批次；QUICK 结果仅供初筛、不可直接提交，入围后需以 FULL 复验；"
+        "不写或写 FULL 时与旧行为完全一致（payload 不变）。"
+        "返回批次号与提交状态。"
     ),
 )
 def qianxun_submit(
@@ -256,7 +333,63 @@ def qianxun_submit(
         settings = _normalize_settings(data["settings"])
         expressions = data["expressions"]
 
+        # ★260923：QUICK 模式拦截前置 —— SUPER/RA 分支在下面，先挡再分流。
+        quick_block = _quick_mode_block_reason(expressions, settings)
+        if quick_block:
+            return json.dumps({"ok": False, "error": quick_block}, ensure_ascii=False)
+        sim_mode = _sim_mode_of(settings)
+
+        # ★260923 v83：RA 原生——入口先幂等修正 settings（region=ALL 系），
+        # 之后与 REGULAR 完全同流（payload type 由 runner 推导、回填自动收 Child）
+        ra_mode = _is_ra_batch(expressions, settings)
+        if ra_mode:
+            settings = _ra_settings(settings)
+
         st = Storage(Path(db_path)) if db_path else _storage()
+
+        # ★260921：SUPER（selection/combo）批次尽早分流 —— 下面按 regular 语义
+        # 取 e["expression"]，而 SUPER 元素没有该键，不先分流会直接 KeyError。
+        # ★260923：分流后先归一化+去重（alphas.expr_key，含同批重复），全部重复则
+        # 不建批次直接返回（对齐 regular 分支行为）；提交走 super_channel 公共模块。
+        if _is_super_batch(expressions):
+            todo_super, skipped_super = super_todo(expressions, settings, st)
+            if not todo_super:
+                return json.dumps(
+                    {"ok": True, "batch_no": None, "skipped": skipped_super,
+                     "message": "全部 SUPER 表达式已回测过，无需提交"},
+                    ensure_ascii=False)
+            batch_no = st.next_batch_no()
+            st.create_ai_batch(
+                batch_no=batch_no,
+                producer=producer,
+                dataset_id=str(settings.get("dataset_id", "")),
+                region=str(settings["region"]),
+                expression_count=len(todo_super),
+                note=(f"SUPER 批次（selection/combo）经 MCP Server 提交 "
+                      f"{Path(json_path).name}（跳过 {skipped_super}）"),
+            )
+            st.update_ai_batch_status(batch_no, "running")
+            res = _submit_super_batch(
+                _client(), st, todo_super, settings, batch_no,
+                max_workers=max(1, min(3, int(concurrent))),
+            )
+            st.update_ai_batch_status(batch_no, "completed")
+            return json.dumps({
+                "ok": True,
+                "batch_no": batch_no,
+                "mode": "SUPER",
+                "submitted": res["submitted"],
+                "completed": res["completed"],
+                "failed": res["failed"],
+                "skipped": skipped_super,
+                "skipped_prescreen": res.get("skipped_prescreen", 0),
+                "errors": res.get("errors", []),
+            }, ensure_ascii=False)
+
+        # ★260921 的 RA 独立旁路已随 v83（260923）废弃：RA 原生内建 runner，
+        # settings 已在上方修正，此处**自然落入下方通用批次流**（去重/task_run/
+        # BatchScheduler/回填全复用；响应通过 ra_mode 附加 mode/parents 字段）。
+
         done = st.completed_expression_keys()
         todo = [(e["expression"], e.get("decay", settings["decay"]), settings)
                 for e in expressions
@@ -280,7 +413,9 @@ def qianxun_submit(
             dataset_id=str(settings.get("dataset_id", "")),
             region=str(settings["region"]),
             expression_count=len(todo),
-            note=f"通过 MCP Server 提交 {Path(json_path).name}（跳过 {skipped}）",
+            sim_mode=sim_mode,
+            note=(f"通过 MCP Server 提交 {Path(json_path).name}（跳过 {skipped}）"
+                  + ("（RA/REGION_AGNOSTIC）" if ra_mode else "")),
         )
 
         events: list = []
@@ -297,12 +432,20 @@ def qianxun_submit(
         completed = sum(1 for e, p in events if e == "sim_completed")
         failed = sum(1 for e, p in events if e == "sim_failed")
 
-        # 回填 alpha 详情
+        # 回填 alpha 详情（v83：RA 批回填 **Children** —— Parent 无指标不入库，
+        # 同时收集 parents 映射供响应；REGULAR 路径逐行不变）
         backfilled = 0
+        parents: list[dict] = []
         if not no_backfill:
             sims = st.list_completed_simulations(tid)
             for i, s in enumerate(sims, 1):
                 try:
+                    if row_is_ra(s):
+                        info = ra_backfill_one(st, client, s, batch_no)
+                        if info:
+                            parents.append(info)
+                            backfilled += len(info["children"])
+                        continue
                     detail = client.get_alpha_details(s["alpha_id"])
                     alpha = client.extract_alpha_metrics(detail)
                     if alpha.get("alpha_id"):
@@ -330,6 +473,7 @@ def qianxun_submit(
             "failed": failed,
             "skipped": skipped,
             "backfilled": backfilled,
+            **({"mode": "RA", "parents": parents} if ra_mode else {}),
         }, ensure_ascii=False)
     except Exception as e:
         return json.dumps({"ok": False, "error": f"{type(e).__name__}: {e}"}, ensure_ascii=False)
