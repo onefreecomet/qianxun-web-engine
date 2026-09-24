@@ -19,12 +19,11 @@
     </div>
     <nav class="anchors">
       <a href="#sec-dashboard">总览 <span class="kbd">1</span></a>
-      <a href="#sec-sync">PnL 同步 <span class="kbd">2</span></a>
-      <a href="#sec-batches">AI 批次 <span class="kbd">3</span></a>
-      <a href="#sec-memo">Alpha 备忘录 <span class="kbd">4</span></a>
-      <a href="#sec-concurrency">设置 <span class="kbd">5</span></a>
-      <a href="#sec-osmosis">Osmosis 分配器 <span class="kbd">6</span></a>
-      <a href="#sec-arc">ARC 回测 <span class="kbd">7</span></a>
+      <a href="#sec-batches">AI 批次 <span class="kbd">2</span></a>
+      <a href="#sec-memo">Alpha 备忘录 <span class="kbd">3</span></a>
+      <a href="#sec-concurrency">设置与配额 <span class="kbd">4</span></a>
+      <a href="#sec-osmosis">Osmosis 分配器 <span class="kbd">5</span></a>
+      <a href="#sec-arc">ARC 回测 <span class="kbd">6</span></a>
       <a href="/simulator" target="_blank" rel="noopener" class="sim-link">
         Alpha Simulator 模拟器 <span class="kbd kbd-ext">↗</span>
       </a>
@@ -33,19 +32,6 @@
       </a>
     </nav>
     <div class="topbar-right">
-      <div class="quota-card" id="quotaBadge" title="每日回测配额（响应头真实值）">
-        <div class="quota-ring">
-          <svg width="20" height="20" viewBox="0 0 20 20">
-            <circle cx="10" cy="10" r="8" fill="none" stroke-width="2" class="quota-ring-bg"/>
-            <circle cx="10" cy="10" r="8" fill="none" stroke-width="2" class="quota-ring-fg" id="quotaRingFg"
-                    stroke-dasharray="50.27" stroke-dashoffset="0" transform="rotate(-90 10 10)"/>
-          </svg>
-        </div>
-        <div>
-          <div class="quota-label">QUOTA</div>
-          <div><span class="quota-value" id="quotaValue">--</span><span class="quota-sub" id="quotaSub">/5000</span></div>
-        </div>
-      </div>
       <div class="ws"><span class="ws-dot"></span><span id="wsStatus">连接中…</span></div>
       <span class="ws-indicator" id="wsIndicator"><svg viewBox="0 0 16 16" style="width:10px;height:10px;fill:currentColor;stroke:none"><circle cx="8" cy="8" r="4"/></svg></span>
     </div>
@@ -94,7 +80,7 @@
       </div>
     </section>
 
-    <!-- ============ 并发设置 + PnL 同步（2:1） ============ -->
+    <!-- ============ 并发设置 + 每日配额（2:1） ============ -->
     <section id="sec-concurrency" class="section">
       <div class="g-2-1">
         <div class="card">
@@ -150,63 +136,88 @@
           </div>
         </div>
 
-        <div class="card card-pnl">
+        <!-- 每日配额：260924 由顶栏徽章迁入内容区，重做为独立仪表卡 -->
+        <div class="card card-quota" id="quotaCard"
+             title="每日回测配额：优先取平台响应头真实值；无读数时按本地提交数兜底">
           <div class="card-head">
-            <div class="card-title"><div class="card-title-icon"><svg class="ico" viewBox="0 0 16 16"><path d="M4 4a5 5 0 0 1 9 3"/><path d="M13 3v4h-4"/><path d="M12 12a5 5 0 0 1-9-3"/><path d="M3 13v-4h4"/></svg></div>PnL 同步</div>
+            <div class="card-title">
+              <div class="card-title-icon"><svg class="ico" viewBox="0 0 16 16"><path d="M8 1.8 14 5v6L8 14.2 2 11V5Z"/><path d="M8 8.1 14 5M8 8.1 2 5M8 8.1v6.1"/></svg></div>每日配额
+            </div>
             <div class="card-head-right">
-              <span class="live-tag" id="syncLiveTag"><span class="live-dot"></span>空闲</span>
+              <span class="live-tag on" id="quotaLiveTag"><span class="live-dot"></span><span id="quotaLiveText">实时</span></span>
             </div>
           </div>
-          <div class="card-body">
-            <div class="sync-flex">
-              <div class="sync-gauge">
-                <svg width="120" height="120" viewBox="0 0 120 120">
-                  <circle cx="60" cy="60" r="52" fill="none" stroke-width="8" class="gauge-bg"/>
-                  <circle cx="60" cy="60" r="52" fill="none" stroke-width="8" class="gauge-fg"
-                          id="syncGaugeFg"
-                          stroke-dasharray="326.7" stroke-dashoffset="326.7" transform="rotate(-90 60 60)"/>
+
+          <div class="card-body quota-body">
+            <!-- 主环：剩余 / 上限 -->
+            <div class="quota-hero">
+              <div class="quota-dial">
+                <svg class="quota-dial-svg" viewBox="0 0 200 200" aria-hidden="true">
+                  <defs>
+                    <linearGradient id="quotaGrad" x1="0" y1="0" x2="1" y2="1">
+                      <stop offset="0%" stop-color="#22D3EE"/>
+                      <stop offset="100%" stop-color="#34D399"/>
+                    </linearGradient>
+                    <linearGradient id="quotaGradWarn" x1="0" y1="0" x2="1" y2="1">
+                      <stop offset="0%" stop-color="#F5B544"/>
+                      <stop offset="100%" stop-color="#FB7185"/>
+                    </linearGradient>
+                  </defs>
+                  <circle class="quota-track" cx="100" cy="100" r="84"/>
+                  <circle class="quota-arc" id="quotaRingFg" cx="100" cy="100" r="84"
+                          transform="rotate(-90 100 100)"/>
                 </svg>
-                <div class="gauge-text">
-                  <div style="text-align:center">
-                    <div class="gauge-percent" id="syncPercent">0%</div>
-                    <div class="gauge-sub" id="syncPhaseLabel">就绪</div>
-                  </div>
-                </div>
-              </div>
-              <div class="sync-info">
-                <div class="sync-title" id="syncStatus">未运行</div>
-                <div class="sync-desc" id="syncProgress">等待启动…</div>
-                <div class="sync-grid-3" id="syncResult" style="display:none">
-                  <div><div class="sync-kv">PnL 已同步</div><div class="sync-kv-val" id="syncResultTotal">0</div></div>
-                  <div><div class="sync-kv">Corr 计算</div><div class="sync-kv-val" id="syncResultCorr">0</div></div>
-                  <div><div class="sync-kv">失败</div><div class="sync-kv-val" id="syncResultFail">0</div></div>
+                <div class="quota-dial-center">
+                  <span class="quota-dial-cap">剩余</span>
+                  <span class="quota-dial-num" id="quotaRemain">--</span>
+                  <span class="quota-dial-sub">/ <b id="quotaLimit">5000</b></span>
                 </div>
               </div>
             </div>
-            <div style="margin-top:14px;display:flex;gap:8px">
-              <button class="btn btn-primary" id="btnStartSync"><svg class="ico" viewBox="0 0 16 16"><path d="M5 3 12 8 5 13Z"/></svg>启动同步</button>
-              <button class="btn" id="btnStopSync"><svg class="ico" viewBox="0 0 16 16"><rect x="4" y="4" width="8" height="8" rx="1.5"/></svg>停止</button>
-            </div>
-            <label style="margin-top:10px;display:flex;gap:7px;align-items:center;font-size:12px;color:var(--text-dim);cursor:pointer">
-              <input type="checkbox" id="syncForceFull" style="width:14px;height:14px;accent-color:var(--accent)">
-              强制全量（跳过增量，重拉所有已提交 alpha 的 PnL）
-            </label>
 
-            <!-- 手动算 Self/PPA Corr -->
-            <div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--border)">
-              <div class="conc-label" style="margin-bottom:8px">手动算 Self/PPA 相关性</div>
-              <div style="display:flex;gap:8px;align-items:center">
-                <input id="corrAlphaId" placeholder="输入 alpha ID，如 Xg7NRLgm"
-                       style="flex:1;background:var(--bg-2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:6px;font:500 13px var(--mono)">
-                <button class="btn btn-primary" id="btnComputeCorr"><svg class="ico" viewBox="0 0 16 16"><path d="M9 2 4 9h4l-1 5 6-8H9Z"/></svg>算 corr</button>
+            <!-- 已用 / 使用率 -->
+            <div class="quota-stats">
+              <div class="quota-stat">
+                <span class="quota-stat-label">已用</span>
+                <span class="quota-stat-value" id="quotaUsed">--</span>
               </div>
-              <p style="font-size:11px;color:var(--text-mute);font-family:var(--mono);margin-top:6px" id="corrResult">
-                // 需先做 PnL 同步；按 alpha 单点计算，不批量消耗资源
-              </p>
+              <div class="quota-stat">
+                <span class="quota-stat-label">使用率</span>
+                <span class="quota-stat-value" id="quotaPct">--</span>
+              </div>
+            </div>
+
+            <!-- 双段配额条：左=已用，右=剩余，全天恒满宽 -->
+            <div class="quota-bar-block">
+              <div class="quota-bar">
+                <div class="quota-bar-used" id="quotaBarUsed" style="width:0%"></div>
+                <div class="quota-bar-left"></div>
+              </div>
+              <div class="quota-bar-legend">
+                <span class="quota-lg quota-lg-used"><i></i>已用 <b id="quotaBarUsedNum">0</b></span>
+                <span class="quota-lg quota-lg-left"><i></i>剩余 <b id="quotaBarLeftNum">5000</b></span>
+              </div>
+            </div>
+
+            <!-- 重置倒计时 -->
+            <div class="quota-reset">
+              <span class="quota-reset-ico">
+                <svg class="ico" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.2"/><path d="M8 4.6V8l2.4 1.6"/></svg>
+              </span>
+              <span class="quota-reset-body">
+                <span class="quota-reset-label">距下次重置</span>
+                <span class="quota-reset-sub">每日 12:00（北京时间日界）</span>
+              </span>
+              <span class="quota-reset-val" id="quotaReset">--:--:--</span>
+            </div>
+
+            <div class="quota-note" id="quotaNote">
+              <span class="quota-note-dot"></span><span id="quotaNoteText">等待平台读数…</span>
             </div>
           </div>
 
-          <!-- 底部直达条：一键打开 BRAIN 平台（卡的直接子元素，横跨卡宽、贴底） -->
+          <!-- 底部直达条：一键打开 BRAIN 平台（卡的直接子元素，横跨卡宽、贴卡底）
+               260924 曾随 PnL 同步卡一起迁走，冰神要求保留，已按原位加回 -->
           <a class="quick-link-bar" href="https://platform.worldquantbrain.com/"
              target="_blank" rel="noopener" title="在新标签页打开 WorldQuant BRAIN 平台">
             <span class="quick-link-mark">WQ</span>
@@ -220,8 +231,6 @@
       </div>
     </section>
 
-    <!-- PnL 同步锚点（内容在上面） -->
-    <span id="sec-sync"></span>
 
     <!-- ============ AI 批次 ============ -->
     <section id="sec-batches" class="section position-relative">

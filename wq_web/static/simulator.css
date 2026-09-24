@@ -1333,3 +1333,96 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* =====================================================================
+   5. PnL 同步（260924 自指挥中心迁入）
+   ---------------------------------------------------------------------
+   位置选在双栏工作区下方的整幅卡，而不是塞进左列或右列：
+   两列原本高度已接近平衡（左≈表达式+设置+PnL 曲线，右≈指标+年度表），
+   单加进任一列会把那列拉长约 400px，另一列底部空出一大块。
+   整幅卡横跨两列：既保住双栏平衡，也让「仪表 / 状态 / 操作」横向铺开一眼看完。
+   ===================================================================== */
+.sim-sync-wrap { margin-top: 18px; }
+.sim-card-sync .sim-card-body { display: flex; flex-direction: column; gap: 16px; }
+.sim-card-sync .sim-card-actions { align-items: center; }
+
+.sync-layout {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 24px;
+  align-items: center;
+}
+
+/* 进度环：style.css 的通用 .gauge-bg 是 --bg-3(#171C26)，压在 #0E1219 的卡底上
+   几乎看不出轨道，整圈像缺了一半。这里换成半透明亮灰 + 放大到 140px，
+   并让 SVG 跟随容器缩放（原 markup 是写死的 120）。 */
+.sim-card-sync .sync-gauge { width: 140px; height: 140px; }
+.sim-card-sync .sync-gauge svg { width: 100%; height: 100%; display: block; }
+.sim-card-sync .gauge-bg { stroke: rgba(148,163,184,0.22); }
+.sim-card-sync .gauge-percent { font-size: 32px; }
+.sim-card-sync .gauge-sub { font-size: 11.5px; letter-spacing: 0.8px; }
+
+/* 中列：标题 + 描述 + 进度条 + 结果三联，纵向撑开，避免整幅卡中间一大片空 */
+.sim-card-sync .sync-info { display: flex; flex-direction: column; gap: 2px; }
+.sync-progress {
+  height: 6px; margin-top: 11px; border-radius: 4px; overflow: hidden;
+  background: var(--bg-3); border: 1px solid var(--border);
+}
+.sync-progress-fill {
+  height: 100%; width: 0%; border-radius: 4px;
+  background: linear-gradient(90deg, var(--accent-2), var(--accent));
+  transition: width .4s var(--ease);
+}
+
+.sync-controls { display: flex; flex-direction: column; gap: 10px; align-items: flex-end; }
+.sync-controls-row { display: flex; gap: 8px; }
+.sync-force {
+  display: flex; align-items: flex-start; gap: 7px;
+  max-width: 320px; font-size: 12px; line-height: 1.45;
+  color: var(--text-dim); cursor: pointer;
+}
+.sync-force input {
+  width: 14px; height: 14px; margin-top: 1px;
+  accent-color: var(--accent); flex: none;
+}
+
+/* 手动算 corr：与上方同步区分成两个功能区，用一条分隔线切开。
+   输入框定宽 + 结果文本吃掉剩余宽度，避免输入框在 1600px 卡宽下拉成一条长带。 */
+.sync-corr {
+  display: flex; flex-direction: column; gap: 9px;
+  padding-top: 14px; border-top: 1px solid var(--border);
+}
+.sync-corr-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.sync-corr-title { font: 600 13px var(--sans); color: var(--text-dim); }
+.sync-corr-hint { font: 500 11px var(--mono); color: var(--text-mute); }
+.sync-corr-row { display: flex; gap: 8px; align-items: center; }
+.sync-corr-row input {
+  width: 340px; flex: none;
+  background: var(--bg-2); border: 1px solid var(--border);
+  color: var(--text); padding: 8px 11px; border-radius: 7px;
+  font: 500 13px var(--mono);
+  transition: border-color .15s var(--ease), box-shadow .15s var(--ease);
+}
+.sync-corr-row input::placeholder { color: var(--text-mute); }
+.sync-corr-row input:focus {
+  outline: none; border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(34,211,238,0.14);
+}
+.sync-corr-result {
+  flex: 1; min-width: 0; margin-left: 6px;
+  font: 500 11.5px var(--mono); color: var(--text-mute);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* 窄屏：操作区从右列掉到下一行，占满整宽。
+   断点取 1000 而非更宽的 1180：实测 1180 时三列仍放得下
+   （140 环 + 24 + 信息 + 24 + 320 操作 ≈ 剩 594px 给信息列），
+   过早换行会把卡高从 377 撑到 507，白白多出一条空带。 */
+@media (max-width: 1000px) {
+  .sync-layout { grid-template-columns: auto minmax(0, 1fr); }
+  .sync-controls { grid-column: 1 / -1; align-items: stretch; }
+  .sync-controls-row { justify-content: flex-end; }
+  .sync-force { max-width: none; }
+  .sync-corr-row { flex-wrap: wrap; }
+  .sync-corr-result { white-space: normal; margin-left: 0; }
+}
+

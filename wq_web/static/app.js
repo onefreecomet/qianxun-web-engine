@@ -85,11 +85,7 @@ function handleWS(msg) {
     renderBatchList();
     return;
   }
-  // PnL 同步进度推送
-  if (msg.event === 'pnl_sync_progress') {
-    refreshSyncStatus();
-    return;
-  }
+  // 注：pnl_sync_progress 事件由 Alpha Simulator 页消费（同步卡已迁到那边），本页不再处理
   // sim_completed / sim_failed / batch_done / batch_error 都触发列表刷新
   if (['sim_completed', 'sim_failed', 'sim_submitted', 'batch_done', 'batch_error'].includes(msg.event)) {
     // 只显示 toast，不每条都重渲染（避免抖动）
@@ -117,68 +113,114 @@ async function loadStats() {
   } catch (e) { toast('加载统计失败：' + e.message, 'error'); }
 }
 
-// ====== 每日配额（顶栏徽章） ======
-let _quotaCountdownTimer = null;
+// ====== 每日配额（内容区仪表卡；260924 由顶栏徽章迁入并重做视觉） ======
+// 数据源优先级由后端 /api/quota 决定：scheduler 响应头真实值 > platform_meta 共享快照 > 本地兜底。
+// 前端只负责把「余量 / 上限 / 重置倒计时」画准，并诚实标注来源与过期态。
+// 三种态共用 paintQuota 一套 DOM 写入，避免真实值/过期/兜底各写一遍导致样式走形。
 
-function fmtReset(sec) {
-  if (!sec || sec <= 0) return '即将重置';
-  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
-  return h > 0 ? `${h}时${m}分` : `${m}分${s}秒`;
+const QUOTA_FALLBACK_LIMIT = 5000; // 平台每日回测配额上限（响应头口径）
+
+function fmtClock(sec) {
+  // 倒计时用 HH:MM:SS：秒位每秒跳动，页面看着是活的；
+  // 旧版「22时28分」这种分钟粒度一整分钟不动，像卡住了。
+  const s = Math.max(Math.floor(sec || 0), 0);
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), ss = s % 60;
+  return [h, m, ss].map(n => String(n).padStart(2, '0')).join(':');
+}
+
+function setQuotaText(id, val) {
+  const el = $(id);
+  if (el) el.textContent = val;
+}
+
+// 唯一画配额的地方。mode: live（平台真实值）/ stale（快照跨过重置点）/ local（无读数，本地兜底）
+function paintQuota(opt) {
+  const mode = opt.mode || 'live';
+  const limit = opt.limit != null && opt.limit > 0 ? opt.limit : null;
+  const remaining = limit != null && opt.remaining != null ? opt.remaining : null;
+  const hasNum = remaining != null;
+  const used = opt.used != null ? opt.used : (hasNum ? Math.max(limit - remaining, 0) : null);
+  const pct = hasNum ? remaining / limit : null;
+  const showLimit = limit != null ? limit : (window._quotaLastLimit || QUOTA_FALLBACK_LIMIT);
+  if (limit != null) window._quotaLastLimit = limit;
+
+  const card = $('quotaCard');
+  if (card) {
+    card.classList.toggle('is-stale', mode === 'stale');
+    card.classList.toggle('no-live', mode !== 'live');
+    card.classList.toggle('is-warn', mode === 'live' && pct != null && pct <= 0.2);
+  }
+
+  setQuotaText('quotaRemain', hasNum ? remaining : '--');
+  setQuotaText('quotaLimit', showLimit);
+  setQuotaText('quotaUsed', used == null ? '--' : used);
+  setQuotaText('quotaPct', pct == null ? '--' : (pct * 100).toFixed(1) + '%');
+  setQuotaText('quotaBarUsedNum', used == null ? '--' : used);
+  setQuotaText('quotaBarLeftNum', hasNum ? remaining : '--');
+  setQuotaText('quotaReset', opt.resetSec == null ? '--:--:--' : fmtClock(opt.resetSec));
+
+  // 环形：弧长 = 剩余占比。半径从 SVG 属性读，改半径不必再改这里的常量。
+  const ring = $('quotaRingFg');
+  if (ring) {
+    const c = 2 * Math.PI * ring.r.baseVal.value;
+    ring.setAttribute('stroke-dasharray', c);
+    ring.setAttribute('stroke-dashoffset', pct == null ? c : c * (1 - pct));
+  }
+
+  // 双段条：左段=已用占比。已用为 0 时整段收起，不留一根假的色块。
+  const usedBar = $('quotaBarUsed');
+  if (usedBar) {
+    const wpct = hasNum && limit > 0 ? Math.min(used / limit * 100, 100) : 0;
+    usedBar.style.display = wpct > 0 ? '' : 'none';
+    usedBar.style.width = wpct + '%';
+  }
+
+  // 状态药丸 + 来源说明
+  const tag = $('quotaLiveTag');
+  if (tag) tag.className = mode === 'live' ? 'live-tag on' : 'live-tag';
+  setQuotaText('quotaLiveText', mode === 'live' ? '实时' : (mode === 'stale' ? '待刷新' : '本地估算'));
+  if (opt.note) setQuotaText('quotaNoteText', opt.note);
 }
 
 function renderQuota() {
-  // stale 态：每秒刷新「距下次重置」的倒计时
+  // 过期态：每秒重画倒计时（快照已失效，但重置时刻还准）
   if (window._quotaStaleData) { renderQuotaStale(window._quotaStaleData); return; }
-  // 有真实值时每秒本地倒计时重画（不重新请求）
-  if (window._quotaData && window._quotaData.limit != null) {
-    const q = window._quotaData;
-    const elapsed = Math.floor(Date.now() / 1000 - q._fetchedAt);
-    const left = Math.max(q.reset_sec_left - elapsed, 0);
-    // 本地倒计时归零 = 快照跨越了重置点，旧数字失效，别再显示
-    if (left <= 0) { renderQuotaStale(q); return; }
-    const pct = q.limit > 0 ? q.remaining / q.limit : 1;
-    // 更新数字
-    $('quotaValue').textContent = q.remaining;
-    $('quotaSub').textContent = `/${q.limit} · ${fmtReset(left)}`;
-    // 更新环形
-    const ring = $('quotaRingFg');
-    if (ring) {
-      const circumference = 2 * Math.PI * 8; // r=8
-      const offset = circumference * (1 - pct);
-      ring.setAttribute('stroke-dashoffset', offset);
-      ring.classList.remove('warn', 'danger');
-      if (pct <= 0.05) ring.classList.add('danger');
-      else if (pct <= 0.2) ring.classList.add('warn');
-    }
-  }
+  if (!window._quotaData || window._quotaData.limit == null) return;
+  const q = window._quotaData;
+  const elapsed = Math.floor(Date.now() / 1000 - q._fetchedAt);
+  const left = Math.max(q.reset_sec_left - elapsed, 0);
+  // 本地倒计时归零 = 快照跨过了重置点，旧数字失效，别再显示
+  if (left <= 0) { renderQuotaStale(q); return; }
+  paintQuota({
+    remaining: q.remaining,
+    limit: q.limit,
+    resetSec: left,
+    mode: 'live',
+    note: '来源：平台响应头真实值，每 60 秒校准',
+  });
 }
 
 // 快照已过期（跨越重置点）：显示占位而非旧数字
 function renderQuotaStale(q) {
   const d = q || {};
   window._quotaStaleData = d;
-  let sub = '/已重置';
+  let resetSec = null;
   if (d.reset_passed_at) {
-    const nextReset = _nextResetFrom(d.reset_passed_at);
-    const left = Math.max(Math.floor(nextReset - Date.now() / 1000), 0);
-    sub = `/已重置 · ${fmtReset(left)}`;
+    resetSec = Math.max(Math.floor(_nextResetFrom(d.reset_passed_at) - Date.now() / 1000), 0);
   } else if (d.next_reset_at) {
-    const left = Math.max(Math.floor(d.next_reset_at - Date.now() / 1000), 0);
-    sub = `/已重置 · ${fmtReset(left)}`;
+    resetSec = Math.max(Math.floor(d.next_reset_at - Date.now() / 1000), 0);
   }
-  $('quotaValue').textContent = '--';
-  $('quotaSub').textContent = sub;
-  const ring = $('quotaRingFg');
-  if (ring) {
-    ring.classList.remove('warn', 'danger');
-    ring.setAttribute('stroke-dashoffset', 0);
-  }
-  const badge = $('quotaBadge');
-  if (badge) {
-    badge.classList.add('stale');
-    const t = d.stale_at ? new Date(d.stale_at * 1000).toLocaleString('zh-CN', { hour12: false }) : '未知';
-    badge.title = `配额快照已过期（${t} 的读数，已跨过重置点）。平台每日 12:00 重置，下次回测后自动更新为真实值。`;
-  }
+  const t = d.stale_at
+    ? new Date(d.stale_at * 1000).toLocaleString('zh-CN', { hour12: false })
+    : '未知';
+  paintQuota({
+    remaining: null,
+    limit: d.limit,
+    used: null,
+    resetSec,
+    mode: 'stale',
+    note: `平台读数已过期（${t} 的快照，已跨过重置点）· 下次回测后自动更新`,
+  });
   window._quotaData = null;
 }
 
@@ -197,27 +239,29 @@ function _nextResetFrom(passedAt) {
 async function refreshQuota() {
   try {
     const r = await api('/api/quota');
-    const badge = $('quotaBadge');
     if (r.limit != null && !r.stale) {
       r._fetchedAt = Date.now() / 1000;
       window._quotaData = r;
       window._quotaStaleData = null;
-      if (badge) {
-        badge.classList.remove('stale');
-        badge.title = '每日回测配额（响应头真实值）';
-      }
       renderQuota();
     } else if (r.stale) {
       renderQuotaStale(r);
     } else {
+      // 完全没有平台读数：只报本配额周期（北京 12:00 起算）的本地提交数，不伪造剩余量
       window._quotaData = null;
       window._quotaStaleData = null;
-      $('quotaValue').textContent = '--';
-      $('quotaSub').textContent = `本周期 ${r.used_local || 0} 次`;
-      if (badge) {
-        badge.classList.remove('stale');
-        badge.title = '暂无平台配额读数；显示本配额周期（北京 12:00 起算）内本地提交的 sim 数';
-      }
+      const usedLocal = r.used_local || 0;
+      const nextReset = r.next_reset_at
+        ? Math.max(Math.floor(r.next_reset_at - Date.now() / 1000), 0)
+        : null;
+      paintQuota({
+        remaining: null,
+        limit: null,
+        used: usedLocal,
+        resetSec: nextReset,
+        mode: 'local',
+        note: `暂无平台读数 · 本周期本地已提交 ${usedLocal} 次（北京 12:00 起算）`,
+      });
     }
   } catch (e) { /* 静默：配额显示失败不干扰主流程 */ }
 }
@@ -663,136 +707,10 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-async function refreshSyncStatus() {
-  try {
-    const r = await api('/api/sync/pnl/status');
-    const running = r.running;
-    state._syncRunning = running;
-    const prog = r.progress || {};
-    const phase = prog.phase || '';
-    const cur = prog.current || 0, tot = prog.total || 0;
-    const msg = prog.message || '';
-    const success = prog.success || 0, failed = prog.failed || 0;
-    // 标题 + 描述
-    $('syncStatus').textContent = running ? '运行中…' : (phase === 'completed' ? '✅ 已完成' : (phase === 'error' ? '❌ 出错' : '未运行'));
-    $('syncProgress').textContent = msg || (running ? '进行中…' : '空闲');
-    // 仪表盘 SVG
-    const pct = tot > 0 ? Math.min(100, cur / tot * 100) : (phase === 'completed' ? 100 : 0);
-    const circumference = 2 * Math.PI * 52; // r=52
-    const gauge = $('syncGaugeFg');
-    if (gauge) {
-      gauge.setAttribute('stroke-dashoffset', circumference * (1 - pct / 100));
-      gauge.classList.remove('completed', 'failed');
-      if (phase === 'completed') gauge.classList.add('completed');
-      else if (phase === 'error') gauge.classList.add('failed');
-    }
-    $('syncPercent').textContent = Math.round(pct) + '%';
-    const phaseMap = { alphas: 'SCAN', 'pnl': 'PNL', writing: 'WRITE', corr: 'CORR', completed: 'DONE', error: 'FAIL' };
-    $('syncPhaseLabel').textContent = phaseMap[phase] || 'READY';
-    // live 标签
-    const liveTag = $('syncLiveTag');
-    if (liveTag) {
-      liveTag.className = running ? 'live-tag on' : 'live-tag';
-      liveTag.lastChild.textContent = running ? 'LIVE' : 'IDLE';
-    }
-    // 结果三联
-    if (r.last_result && r.last_result.total) {
-      $('syncResult').style.display = 'grid';
-      $('syncResultTotal').textContent = r.last_result.total;
-      $('syncResultCorr').textContent = r.last_result.corr_computed || 0;
-      $('syncResultFail').textContent = (r.last_result.failed_ids || []).length;
-    }
-  } catch (e) { /* 忽略 */ }
-  return !!state._syncRunning;
-}
-
-function renderSyncResult(r) {
-  const el = $('syncResult');
-  if (!r || !r.total) { el.innerHTML = ''; return; }
-  const reasons = r.failed_reasons || [];
-  let html = `
-    <div class="kv-grid">
-      <div><span>总数</span><span>${r.total}</span></div>
-      <div><span>成功</span><span style="color:var(--green)">${r.success}</span></div>
-      <div><span>失败</span><span style="color:var(--red)">${(r.failed_ids || []).length}</span></div>
-      <div><span>Corr 计算</span><span>${r.corr_computed || 0}</span></div>
-    </div>
-  `;
-  if (reasons.length > 0) {
-    html += `<h3 style="margin-top:14px;font-size:13px;color:var(--text-dim)">失败原因（按频率排序）</h3>`;
-    html += `<table class="data-table"><thead><tr><th>模式</th><th>次数</th><th>样例 ID</th></tr></thead><tbody>`;
-    for (const fr of reasons.slice(0, 10)) {
-      html += `<tr><td class="muted">${fr.pattern}</td><td>${fr.count}</td><td class="muted" style="font-size:12px">${fr.sample_ids.join(', ')}</td></tr>`;
-    }
-    html += `</tbody></table>`;
-  }
-  el.innerHTML = html;
-}
-
-$('btnStartSync').addEventListener('click', async () => {
-  $('syncStatus').textContent = '启动中…';
-  try {
-    // 默认增量只拉未拉过的；勾选「强制全量」则重拉所有
-    const forceFull = document.getElementById('syncForceFull')?.checked || false;
-    const r = await api('/api/sync/pnl', { method: 'POST', body: JSON.stringify({ compute_corr: false, force_full: forceFull }) });
-    if (!r.ok) { toast(r.error || '启动失败', 'error'); $('syncStatus').textContent = '未运行'; return; }
-    toast('PnL 同步已启动' + (forceFull ? '（强制全量）' : '（增量）'), 'success');
-    if (window._syncTimer) clearInterval(window._syncTimer);
-    window._syncTimer = setInterval(refreshSyncStatus, 1500);
-    refreshSyncStatus();
-  } catch (e) {
-    const msg = (e && e.message) ? e.message : '';
-    // 刷新页面后点启动：后端已在跑，恢复进度轮询即可，不报错
-    if (msg.includes('已在运行')) {
-      if (window._syncTimer) clearInterval(window._syncTimer);
-      window._syncTimer = setInterval(refreshSyncStatus, 1500);
-      refreshSyncStatus();
-      toast('同步已在后台运行，已恢复进度轮询', 'success');
-    } else {
-      toast('启动失败：' + msg, 'error');
-      $('syncStatus').textContent = '未运行';
-    }
-  }
-});
-$('btnStopSync').addEventListener('click', async () => {
-  try {
-    await api('/api/sync/pnl/stop', { method: 'POST' });
-    toast('已发送停止信号', 'success');
-  } catch (e) { toast('停止失败：' + e.message, 'error'); }
-});
-
-// ====== 手动算 Self/PPA corr（按需触发） ======
-$('btnComputeCorr').addEventListener('click', async () => {
-  const alphaId = ($('corrAlphaId')?.value || '').trim();
-  if (!alphaId) { toast('先填 alpha ID', 'error'); return; }
-  const el = $('corrResult');
-  const btn = $('btnComputeCorr');
-  el.textContent = '计算中…';
-  btn.disabled = true;
-  try {
-    const r = await api('/api/corr/compute', {
-      method: 'POST',
-      body: JSON.stringify({ alpha_id: alphaId }),
-    });
-    const max = r.max_corr;
-    const src = r.max_corr_source || '—';
-    const sm = r.self ? r.self.max : null;
-    const pm = r.ppa ? r.ppa.max : null;
-    const pool = r.pool_size ?? 0;
-    el.innerHTML = max != null
-      ? `SELF=<span style="font-weight:600">${sm != null ? sm.toFixed(3) : '—'}</span>`
-        + `　PPA=<span style="font-weight:600">${pm != null ? pm.toFixed(3) : '—'}</span>`
-        + `　→ max_corr = <span style="color:var(--accent);font-weight:600">${max.toFixed(3)}</span> (${src})`
-        + `　池子 ${pool} 条`
-      : (r.message || '算完但池子为空（该 region 账号下无已提交 alpha）');
-    toast(`✅ ${alphaId} max_corr=${max != null ? max.toFixed(3) : 'N/A'} (${src})`, 'success');
-  } catch (e) {
-    el.textContent = '';
-    toast(`算 corr 失败：${e.message}`, 'error');
-  } finally {
-    btn.disabled = false;
-  }
-});
+// ====== PnL 同步 / 手动算 corr ======
+// 260924 整块迁到 Alpha Simulator 页（templates/simulator.html + static/simulator.js）。
+// 指挥中心的 #sec-sync 锚点与顶栏「PnL 同步」入口同时下线，该位置改为「每日配额」卡。
+// 这里不再保留任何 sync 相关的 DOM 操作：元素已不在本页，留着会取到 null 直接抛错。
 
 // ====== Alpha 备忘录 ======
 const memoState = { rows: [], sortKey: null, sortDir: -1 };
@@ -1412,21 +1330,18 @@ loadOsmosisTracks();
 // 直达批次详情：/?batch=B... （收藏直达 & 无头截图用，260923 第三刀）
 const _batchParam = new URLSearchParams(location.search).get('batch');
 if (_batchParam) setTimeout(() => selectBatch(_batchParam), 500);
-refreshSyncStatus().then(running => {
-  // 刷新页面后若后端同步仍在运行，自动恢复进度轮询（定时器随页面销毁）
-  if (running && !window._syncTimer) window._syncTimer = setInterval(refreshSyncStatus, 1500);
-});
 connectWS();
 
 // ====== 锚点 active 状态跟随滚动 ======
-// 物理顺序 → 导航锚点索引（导航：总览0 / PnL同步1 / AI批次2 / 备忘录3 / 设置4 / Osmosis5）
+// 数组必须按「文档物理顺序」排列（循环取最后一个 offsetTop <= y 的项）。
+// 260924 导航去掉「PnL 同步」一项，索引整体前移：总览0 / AI批次1 / 备忘录2 / 设置与配额3 / Osmosis4 / ARC5
 const _sectionAnchor = [
   ['sec-dashboard', 0],
-  ['sec-concurrency', 1], // 同步内容在并发区里
-  ['sec-batches', 2],
-  ['sec-memo', 3],
-  ['sec-osmosis', 5],
-  ['sec-arc', 6],
+  ['sec-concurrency', 3], // 设置与配额（并发设置 + 每日配额同区）
+  ['sec-batches', 1],
+  ['sec-memo', 2],
+  ['sec-osmosis', 4],
+  ['sec-arc', 5],
 ];
 const _sections = _sectionAnchor
   .map(([id]) => document.getElementById(id))

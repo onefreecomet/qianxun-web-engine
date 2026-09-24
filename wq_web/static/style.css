@@ -114,22 +114,7 @@ body::before {
 .anchors a.sim-link.active .kbd-ext { background: rgba(245,181,68,0.18); color: var(--accent-2); }
 
 .topbar-right { margin-left: auto; display: flex; align-items: center; gap: 14px; }
-.quota-card {
-  display: flex; align-items: center; gap: 10px;
-  background: var(--bg-2); padding: 6px 14px 6px 8px; border-radius: 8px;
-  border: 1px solid var(--border);
-}
-.quota-ring { width: 20px; height: 20px; }
-.quota-ring-bg { stroke: var(--bg-3); }
-.quota-ring-fg { stroke: var(--accent); stroke-linecap: round; transition: stroke-dashoffset 0.4s; }
-.quota-label { font: 500 11px var(--mono); color: var(--text-mute); text-transform: uppercase; letter-spacing: 1px; }
-.quota-value { font: 700 16px var(--mono); color: var(--accent); font-variant-numeric: tabular-nums; }
-.quota-sub { font: 500 12px var(--mono); color: var(--text-mute); }
-
-/* 配额快照已过期（跨过平台重置点）：灰化 + 去发光，避免旧数字被当成真值 */
-.quota-card.stale { border-color: var(--text-mute); opacity: 0.75; }
-.quota-card.stale .quota-value { color: var(--text-mute); }
-.quota-card.stale .quota-ring-fg { stroke: var(--text-mute); filter: none; }
+/* 配额徽章 260924 已从顶栏迁入内容区，样式见下方「每日配额卡」 */
 .ws { display: flex; align-items: center; gap: 6px; font: 500 12px var(--mono); color: var(--text-dim); }
 .ws-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); box-shadow: 0 0 12px var(--good); animation: pulse 2s infinite; }
 .ws-indicator { font-size: 14px; color: var(--text-mute); transition: color 0.2s; }
@@ -211,16 +196,137 @@ main { position: relative; z-index: 1; max-width: 1400px; margin: 0 auto; paddin
 .live-tag.on .live-dot { background: var(--good); box-shadow: 0 0 8px var(--good); animation: pulse 1.4s infinite; }
 .card-body { padding: 18px; position: relative; z-index: 1; }
 
-/* ===== PnL 卡：填满同排行高 + 底部直达条 ===== */
-/* 这张卡是 .g-2-1 的 1fr 列，内容比左侧「并发设置」矮。两种直觉做法都不好看：
-   ① 让 grid 拉伸卡片（默认行为）→ 卡底空出一大块，空白被边框圈住，像没做完；
-   ② 让卡片按内容自适应高度（align-self:start）→ 空洞只是跑到卡外，右列底部短一截。
-   这里用第三种：卡片照旧等高，把富余高度交给仪表盘那一行（.sync-flex 撑开 + 垂直居中），
-   空白被摊进仪表盘区的上下留白里。实测三种排法：只有这种「卡内空洞 0 且与左卡齐底」。
-   注意：左卡高度受 #promptList 的 max-height:220px 约束，不会无限增长，所以这里够稳。 */
-.card-pnl { display: flex; flex-direction: column; }
-.card-pnl > .card-body { flex: 1; display: flex; flex-direction: column; }
-.card-pnl .sync-flex { flex: 1; align-items: center; }
+/* =====================================================================
+   每日配额卡（260924 由顶栏徽章迁入 .g-2-1 的 1fr 列，视觉重做）
+   ---------------------------------------------------------------------
+   等高问题的处理沿用原 PnL 卡的结论：卡片是 .g-2-1 的 1fr 列，内容比左侧
+   「并发设置」矮。让 grid 拉伸卡片 → 卡底空出一块被边框圈住，像没做完；
+   让卡片自适应高度 → 空洞跑到卡外，右列短一截。所以这里卡片照旧等高，
+   把富余高度交给环形仪表区（.quota-hero flex:1 居中），空白摊进上下留白。
+   左卡高度受 #promptList 的 max-height:220px 约束，不会无限增长，所以够稳。
+   ===================================================================== */
+.card-quota { display: flex; flex-direction: column; }
+.card-quota > .card-body { flex: 1; display: flex; flex-direction: column; gap: 14px; }
+.quota-hero { flex: 1; display: grid; place-items: center; padding: 6px 0 2px; }
+
+/* ---------- 环形余量仪表 ---------- */
+.quota-dial { position: relative; width: 200px; height: 200px; }
+.quota-dial-svg { width: 100%; height: 100%; display: block; }
+.quota-track { fill: none; stroke: var(--bg-3); stroke-width: 13; }
+.quota-arc {
+  fill: none; stroke: url(#quotaGrad); stroke-width: 13; stroke-linecap: round;
+  filter: drop-shadow(0 0 8px rgba(34,211,238,0.45));
+  transition: stroke-dashoffset .6s var(--ease);
+}
+/* 环内柔光底：让中间的数字浮在光晕上，而不是贴在深底上 */
+.quota-dial::before {
+  content: ''; position: absolute; inset: 24px; border-radius: 50%; pointer-events: none;
+  background: radial-gradient(circle at 50% 36%, rgba(34,211,238,0.14), transparent 68%);
+}
+.quota-dial-center {
+  position: absolute; inset: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 3px;
+}
+.quota-dial-cap {
+  font: 600 10.5px var(--mono); color: var(--text-mute);
+  text-transform: uppercase; letter-spacing: 1.5px;
+}
+.quota-dial-num {
+  font: 700 40px var(--display); color: var(--text); line-height: 1;
+  letter-spacing: -1.5px; font-variant-numeric: tabular-nums;
+  text-shadow: 0 0 22px rgba(34,211,238,0.3);
+}
+.quota-dial-sub { font: 500 12px var(--mono); color: var(--text-mute); }
+.quota-dial-sub b { color: var(--text-dim); font-weight: 600; }
+
+/* ---------- 已用 / 使用率 ---------- */
+.quota-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.quota-stat {
+  background: var(--bg-2); border: 1px solid var(--border); border-radius: 9px;
+  padding: 9px 12px; display: flex; flex-direction: column; gap: 3px;
+  transition: border-color .16s var(--ease);
+}
+.quota-stat:hover { border-color: var(--border-2); }
+.quota-stat-label {
+  font: 500 10.5px var(--mono); color: var(--text-mute);
+  text-transform: uppercase; letter-spacing: 0.9px;
+}
+.quota-stat-value {
+  font: 700 19px var(--display); color: var(--text);
+  line-height: 1.1; font-variant-numeric: tabular-nums;
+}
+
+/* ---------- 双段配额条：左=已用（琥珀→珊瑚），右=剩余（青→绿），全天恒满宽 ---------- */
+.quota-bar-block { display: flex; flex-direction: column; gap: 7px; }
+.quota-bar {
+  display: flex; gap: 2px; height: 10px; padding: 1px; border-radius: 6px;
+  background: var(--bg-3); border: 1px solid var(--border); overflow: hidden;
+}
+.quota-bar-used {
+  min-width: 4px; border-radius: 4px;
+  background: linear-gradient(90deg, var(--accent-2), var(--bad));
+  transition: width .6s var(--ease);
+}
+.quota-bar-left {
+  flex: 1; min-width: 0; border-radius: 4px;
+  background: linear-gradient(90deg, rgba(34,211,238,0.9), rgba(52,211,153,0.9));
+  transition: opacity .6s var(--ease);
+}
+.quota-bar-legend {
+  display: flex; justify-content: space-between;
+  font: 500 11px var(--mono); color: var(--text-dim);
+}
+.quota-lg { display: inline-flex; align-items: center; gap: 5px; }
+.quota-lg i { width: 7px; height: 7px; border-radius: 2px; flex: none; }
+.quota-lg-used i { background: linear-gradient(135deg, var(--accent-2), var(--bad)); }
+.quota-lg-left i { background: linear-gradient(135deg, var(--accent), var(--accent-3)); }
+.quota-lg b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+
+/* ---------- 重置倒计时 ---------- */
+.quota-reset {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px; border-radius: 9px;
+  background: var(--bg-2); border: 1px solid var(--border);
+}
+.quota-reset-ico {
+  width: 26px; height: 26px; flex: none; display: grid; place-items: center;
+  border-radius: 7px; background: var(--signal-soft);
+  border: 1px solid rgba(34,211,238,0.2); color: var(--accent);
+}
+.quota-reset-body { display: flex; flex-direction: column; min-width: 0; }
+.quota-reset-label { font: 600 12px var(--sans); color: var(--text-dim); }
+.quota-reset-sub { font: 500 10.5px var(--mono); color: var(--text-mute); }
+.quota-reset-val {
+  margin-left: auto; font: 600 20px var(--mono); color: var(--accent);
+  letter-spacing: 0.5px; white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+
+/* ---------- 数据来源 ---------- */
+.quota-note {
+  display: flex; align-items: center; gap: 7px;
+  font: 500 11px var(--mono); color: var(--text-mute);
+}
+.quota-note-dot {
+  width: 6px; height: 6px; border-radius: 50%; flex: none;
+  background: var(--good); box-shadow: 0 0 8px var(--good);
+  animation: pulse 2s infinite;
+}
+
+/* ---------- 预警 / 过期态 ---------- */
+/* 余量 ≤20%：环与已用段转为琥珀→珊瑚，一眼看出该省着用了 */
+.card-quota.is-warn .quota-arc { stroke: url(#quotaGradWarn); filter: drop-shadow(0 0 8px rgba(245,181,68,0.45)); }
+.card-quota.is-warn .quota-dial::before { background: radial-gradient(circle at 50% 36%, rgba(245,181,68,0.15), transparent 68%); }
+.card-quota.is-warn .quota-dial-num { text-shadow: 0 0 22px rgba(245,181,68,0.3); }
+/* 快照已过期（跨过平台重置点）：整体灰化 + 去发光，避免旧数字被当成真值 */
+.card-quota.is-stale .quota-arc { stroke: var(--text-mute); filter: none; }
+.card-quota.is-stale .quota-dial-num { color: var(--text-mute); text-shadow: none; }
+.card-quota.is-stale .quota-dial::before { background: none; }
+.card-quota.is-stale .quota-reset-val { color: var(--text-dim); }
+/* 无实时读数（stale 或 local）时，剩余量未知 —— 配额条不能还亮着满格青色，
+   那等于在视觉上宣称「还剩很多」。整条转中性灰，只保留「已用」那一段的语义。 */
+.card-quota.no-live .quota-bar-used { background: var(--text-mute); }
+.card-quota.no-live .quota-bar-left { background: var(--text-mute); opacity: 0.45; }
+.card-quota.no-live .quota-note-dot { background: var(--warn); box-shadow: 0 0 8px var(--warn); }
 
 /* 直达条：卡的直接子元素，横跨卡宽、贴卡底，被 .card 的 overflow:hidden 裁出圆角 */
 .quick-link-bar {
@@ -308,8 +414,7 @@ main { position: relative; z-index: 1; max-width: 1400px; margin: 0 auto; paddin
 }
 .rate-chip.limited .rate-dot { background: var(--bad); box-shadow: 0 0 8px var(--bad); animation: none; }
 
-/* ===== Sync gauge ===== */
-.sync-flex { display: flex; align-items: center; gap: 20px; }
+/* ===== Sync gauge（PnL 同步卡 260924 迁到模拟器页，此处保留卡内共用件） ===== */
 .sync-gauge { position: relative; width: 120px; height: 120px; flex-shrink: 0; }
 .gauge-bg { stroke: var(--bg-3); }
 .gauge-fg { stroke: var(--good); stroke-linecap: round; transition: stroke-dashoffset 0.4s; }
@@ -485,7 +590,9 @@ code { background: rgba(56,189,248,0.1); color: var(--accent); padding: 1px 6px;
   .hero-stats { grid-template-columns: repeat(2, 1fr); }
   .anchors { margin-left: 12px; flex-wrap: wrap; }
   .anchors a { padding: 0 10px; font-size: 13px; height: 44px; }
-  .topbar-right .quota-card { display: none; }
+  .quota-dial { width: 168px; height: 168px; }
+  .quota-dial-num { font-size: 34px; }
+  .quota-reset-val { font-size: 17px; }
 }
 @media (max-width: 600px) {
   .prompt-list { grid-template-columns: 1fr; }
@@ -623,9 +730,10 @@ code { background: rgba(56,189,248,0.1); color: var(--accent); padding: 1px 6px;
 .live-tag { border: 1px solid var(--border); border-radius: 20px; padding: 4px 9px; text-transform: none; letter-spacing: 0; }
 .live-tag.on { color: var(--good); background: var(--pos-soft); border-color: rgba(74,222,128,0.35); box-shadow: 0 0 12px rgba(74,222,128,0.18); }
 
-/* 配额环 / 仪表辉光 */
-.quota-ring-fg { filter: drop-shadow(0 0 5px rgba(34,211,238,0.55)); }
+/* 同步仪表辉光（模拟器页 PnL 同步卡） */
 .gauge-fg { stroke: var(--warn); filter: drop-shadow(0 0 6px rgba(245,181,68,0.5)); }
+.gauge-fg.completed { stroke: var(--good); filter: drop-shadow(0 0 6px rgba(74,222,128,0.5)); }
+.gauge-fg.failed { stroke: var(--bad); filter: drop-shadow(0 0 6px rgba(251,113,133,0.5)); }
 
 /* 提示词 / 批次项左侧信号条 */
 .prompt-item { border-left: 2px solid transparent; }

@@ -288,6 +288,90 @@
         </div>
       </div>
     </div>
+
+    <!-- ============ PnL 同步（260924 自指挥中心迁入） ============ -->
+    <section class="sim-sync-wrap">
+      <div class="sim-card sim-card-sync">
+        <div class="sim-card-head">
+          <span class="sim-head-title">
+            <svg class="ico" viewBox="0 0 24 24"><path d="M4 4a5 5 0 0 1 9 3"/><path d="M13 3v4h-4"/><path d="M12 12a5 5 0 0 1-9-3"/><path d="M3 13v-4h4"/></svg>
+            PnL 同步
+          </span>
+          <div class="sim-card-actions">
+            <span class="sim-card-sub">已提交 alpha 的 PnL / Corr 本地库同步</span>
+            <span class="live-tag" id="syncLiveTag"><span class="live-dot"></span>空闲</span>
+          </div>
+        </div>
+
+        <div class="sim-card-body">
+          <div class="sync-layout">
+            <!-- 进度仪表 -->
+            <div class="sync-gauge">
+              <svg width="120" height="120" viewBox="0 0 120 120">
+                <circle cx="60" cy="60" r="52" fill="none" stroke-width="8" class="gauge-bg"/>
+                <circle cx="60" cy="60" r="52" fill="none" stroke-width="8" class="gauge-fg"
+                        id="syncGaugeFg" stroke-dasharray="326.7" stroke-dashoffset="326.7"
+                        transform="rotate(-90 60 60)"/>
+              </svg>
+              <div class="gauge-text">
+                <div style="text-align:center">
+                  <div class="gauge-percent" id="syncPercent">0%</div>
+                  <div class="gauge-sub" id="syncPhaseLabel">就绪</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 状态与结果 -->
+            <div class="sync-info">
+              <div class="sync-title" id="syncStatus">未运行</div>
+              <div class="sync-desc" id="syncProgress">等待启动…</div>
+              <div class="sync-progress"><div class="sync-progress-fill" id="syncProgressFill"></div></div>
+              <div class="sync-grid-3" id="syncResult" style="display:none">
+                <div><div class="sync-kv">PnL 已同步</div><div class="sync-kv-val" id="syncResultTotal">0</div></div>
+                <div><div class="sync-kv">Corr 计算</div><div class="sync-kv-val" id="syncResultCorr">0</div></div>
+                <div><div class="sync-kv">失败</div><div class="sync-kv-val" id="syncResultFail">0</div></div>
+              </div>
+            </div>
+
+            <!-- 操作区 -->
+            <div class="sync-controls">
+              <div class="sync-controls-row">
+                <button class="btn btn-primary" id="btnStartSync"><svg class="ico" viewBox="0 0 16 16"><path d="M5 3 12 8 5 13Z"/></svg>启动同步</button>
+                <button class="btn" id="btnStopSync"><svg class="ico" viewBox="0 0 16 16"><rect x="4" y="4" width="8" height="8" rx="1.5"/></svg>停止</button>
+              </div>
+              <label class="sync-force">
+                <input type="checkbox" id="syncForceFull">
+                强制全量（跳过增量，重拉所有已提交 alpha 的 PnL）
+              </label>
+            </div>
+          </div>
+
+          <!-- 手动算 Self/PPA 相关性 -->
+          <div class="sync-corr">
+            <div class="sync-corr-head">
+              <span class="sync-corr-title">手动算 Self/PPA 相关性</span>
+              <span class="sync-corr-hint">SELF 与 PPA 两条取最大值作为 max_corr</span>
+            </div>
+            <div class="sync-corr-row">
+              <input id="corrAlphaId" placeholder="输入 alpha ID，如 Xg7NRLgm" autocomplete="off">
+              <button class="btn btn-primary" id="btnComputeCorr"><svg class="ico" viewBox="0 0 16 16"><path d="M9 2 4 9h4l-1 5 6-8H9Z"/></svg>算 corr</button>
+              <p class="sync-corr-result" id="corrResult">// 需先做 PnL 同步；按 alpha 单点计算，不批量消耗资源</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- 底部直达条：一键打开 BRAIN 平台 -->
+        <a class="quick-link-bar" href="https://platform.worldquantbrain.com/"
+           target="_blank" rel="noopener" title="在新标签页打开 WorldQuant BRAIN 平台">
+          <span class="quick-link-mark">WQ</span>
+          <span class="quick-link-text">
+            <span class="quick-link-name">BRAIN 平台</span>
+            <span class="quick-link-url">platform.worldquantbrain.com</span>
+          </span>
+          <svg class="ico quick-link-go" viewBox="0 0 16 16"><path d="M6.5 3.5H13v6.5"/><path d="M13 3 4 12"/></svg>
+        </a>
+      </div>
+    </section>
   </main>
 
   <footer class="sim-footer">

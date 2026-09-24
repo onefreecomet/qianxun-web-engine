@@ -1491,3 +1491,150 @@ function bindPayInteractions() {
 
 // 支持 ?pay=1 直达
 if (urlParams.get('pay')) openPayModal();
+
+// =====================================================================
+// PnL 同步（260924 自指挥中心迁入）
+// ---------------------------------------------------------------------
+// 与原指挥中心版本的两点差异：
+//  1) 指挥中心有 WebSocket 推送 pnl_sync_progress，本页没有 WS，
+//     所以运行期用 1500ms 轮询兜住进度（与旧版轮询节奏一致，不引入新机制）。
+//  2) 运行态放本模块作用域，不污染本页已有的 state。
+// 元素取不到时一律跳过（if 守卫），避免卡片被移除后整页 JS 中断。
+// =====================================================================
+let syncRunning = false;
+
+function syncSetText(id, val) { const el = $(id); if (el) el.textContent = val; }
+
+async function refreshSyncStatus() {
+  try {
+    const r = await api('/api/sync/pnl/status');
+    syncRunning = !!r.running;
+    const prog = r.progress || {};
+    const phase = prog.phase || '';
+    const cur = prog.current || 0, tot = prog.total || 0;
+    const msg = prog.message || '';
+
+    syncSetText('syncStatus', syncRunning ? '运行中…'
+      : (phase === 'completed' ? '✅ 已完成' : (phase === 'error' ? '❌ 出错' : '未运行')));
+    syncSetText('syncProgress', msg || (syncRunning ? '进行中…' : '空闲'));
+
+    // 仪表盘：总量已知才按比例画，总量未知时不假装进度
+    const pct = tot > 0 ? Math.min(100, cur / tot * 100) : (phase === 'completed' ? 100 : 0);
+    const gauge = $('syncGaugeFg');
+    if (gauge) {
+      const c = 2 * Math.PI * 52; // r=52，与 markup 保持一致
+      gauge.setAttribute('stroke-dasharray', c);
+      gauge.setAttribute('stroke-dashoffset', c * (1 - pct / 100));
+      gauge.classList.remove('completed', 'failed');
+      if (phase === 'completed') gauge.classList.add('completed');
+      else if (phase === 'error') gauge.classList.add('failed');
+    }
+    syncSetText('syncPercent', Math.round(pct) + '%');
+    // 环形下方的线性进度条：整幅卡很宽，光靠 140px 的环看不出进度，条更直观
+    const fill = $('syncProgressFill');
+    if (fill) fill.style.width = Math.min(Math.max(pct, 0), 100) + '%';
+    const phaseMap = { alphas: 'SCAN', pnl: 'PNL', writing: 'WRITE', corr: 'CORR', completed: 'DONE', error: 'FAIL' };
+    syncSetText('syncPhaseLabel', phaseMap[phase] || 'READY');
+
+    const liveTag = $('syncLiveTag');
+    if (liveTag) {
+      liveTag.className = syncRunning ? 'live-tag on' : 'live-tag';
+      // 末位是文本节点（<span class="live-dot"></span>空闲），只改文本不动圆点
+      if (liveTag.lastChild && liveTag.lastChild.nodeType === 3) {
+        liveTag.lastChild.textContent = syncRunning ? 'LIVE' : '空闲';
+      }
+    }
+
+    if (r.last_result && r.last_result.total) {
+      const box = $('syncResult');
+      if (box) box.style.display = 'grid';
+      syncSetText('syncResultTotal', r.last_result.total);
+      syncSetText('syncResultCorr', r.last_result.corr_computed || 0);
+      syncSetText('syncResultFail', (r.last_result.failed_ids || []).length);
+    }
+  } catch (e) { /* 静默：进度显示失败不打断主流程 */ }
+  return syncRunning;
+}
+
+// 重复调用安全：先清旧定时器再起新的
+function startSyncPolling() {
+  if (window._syncTimer) clearInterval(window._syncTimer);
+  window._syncTimer = setInterval(refreshSyncStatus, 1500);
+  refreshSyncStatus();
+}
+
+(function bindSyncCard() {
+  const startBtn = $('btnStartSync');
+  if (!startBtn) return; // 卡片不在本页时直接跳过
+
+  startBtn.addEventListener('click', async () => {
+    syncSetText('syncStatus', '启动中…');
+    try {
+      // 默认增量只拉未拉过的；勾选「强制全量」则重拉所有
+      const forceFull = $('syncForceFull') ? $('syncForceFull').checked : false;
+      const r = await api('/api/sync/pnl', {
+        method: 'POST',
+        body: JSON.stringify({ compute_corr: false, force_full: forceFull }),
+      });
+      if (!r.ok) { toast(r.error || '启动失败', 'error'); syncSetText('syncStatus', '未运行'); return; }
+      toast('PnL 同步已启动' + (forceFull ? '（强制全量）' : '（增量）'), 'success');
+      startSyncPolling();
+    } catch (e) {
+      const msg = (e && e.message) ? e.message : '';
+      // 刷新页面后点启动：后端已在跑，恢复进度轮询即可，不报错
+      if (msg.indexOf('已在运行') >= 0) {
+        startSyncPolling();
+        toast('同步已在后台运行，已恢复进度轮询', 'success');
+      } else {
+        toast('启动失败：' + msg, 'error');
+        syncSetText('syncStatus', '未运行');
+      }
+    }
+  });
+
+  const stopBtn = $('btnStopSync');
+  if (stopBtn) stopBtn.addEventListener('click', async () => {
+    try {
+      await api('/api/sync/pnl/stop', { method: 'POST' });
+      toast('已发送停止信号', 'success');
+    } catch (e) { toast('停止失败：' + e.message, 'error'); }
+  });
+
+  // 手动算 Self/PPA corr（按需触发）
+  const corrBtn = $('btnComputeCorr');
+  if (corrBtn) corrBtn.addEventListener('click', async () => {
+    const alphaId = ($('corrAlphaId') && $('corrAlphaId').value || '').trim();
+    if (!alphaId) { toast('先填 alpha ID', 'error'); return; }
+    const el = $('corrResult');
+    el.textContent = '计算中…';
+    corrBtn.disabled = true;
+    try {
+      const r = await api('/api/corr/compute', {
+        method: 'POST',
+        body: JSON.stringify({ alpha_id: alphaId }),
+      });
+      const max = r.max_corr;
+      const src = r.max_corr_source || '—';
+      const sm = r.self ? r.self.max : null;
+      const pm = r.ppa ? r.ppa.max : null;
+      const pool = r.pool_size == null ? 0 : r.pool_size;
+      el.innerHTML = max != null
+        ? `SELF=<span style="font-weight:600">${sm != null ? sm.toFixed(3) : '—'}</span>`
+          + `　PPA=<span style="font-weight:600">${pm != null ? pm.toFixed(3) : '—'}</span>`
+          + `　→ max_corr = <span style="color:var(--accent);font-weight:600">${max.toFixed(3)}</span> (${src})`
+          + `　池子 ${pool} 条`
+        : (r.message || '算完但池子为空（该 region 账号下无已提交 alpha）');
+      toast(`✅ ${alphaId} max_corr=${max != null ? max.toFixed(3) : 'N/A'} (${src})`, 'success');
+    } catch (e) {
+      el.textContent = '';
+      toast(`算 corr 失败：${e.message}`, 'error');
+    } finally {
+      corrBtn.disabled = false;
+    }
+  });
+
+  // 进页先读一次状态：后端若正在跑，自动接上进度轮询（刷新页面不丢进度）
+  refreshSyncStatus().then((running) => {
+    if (running && !window._syncTimer) window._syncTimer = setInterval(refreshSyncStatus, 1500);
+  });
+})();
