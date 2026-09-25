@@ -67,7 +67,9 @@ def main() -> None:
         sys.stderr.write("千寻 web server 启动超时\n")
         sys.exit(1)
 
-    url = f"http://127.0.0.1:{port}/#sec-sync"
+    # 260924 起「PnL 同步」入口已从指挥中心下线（整卡迁到模拟器页），
+    # #sec-sync 锚点同时删除，这里改为落到「设置与配额」区
+    url = f"http://127.0.0.1:{port}/#sec-concurrency"
     window = webview.create_window(
         title=f"千寻 web · v81 · :{port}",
         url=url,

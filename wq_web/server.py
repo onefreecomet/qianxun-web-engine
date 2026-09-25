@@ -34,7 +34,16 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse  # no
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 from fastapi.templating import Jinja2Templates  # noqa: E402
 
-import workdaddy_proxy as _wd  # noqa: E402  积分签到：WorkDaddy 本地服务代理
+# ⚠️ 必须写成「包内绝对导入」，不能写成 `import workdaddy_proxy`。
+# 原因：后者只在「启动器位于 wq_web/ 目录内」时才成立 —— 那种情况下 Python 会把
+# 脚本所在目录自动加进 sys.path。而本仓库的启动器放在项目根（run_web.py / run_native.py），
+# 加进去的是项目根，`import workdaddy_proxy` 就会 ModuleNotFoundError，服务直接起不来
+# （260925 实测：克隆本仓库后 python run_web.py 退出码 1）。
+# 写成 from wq_web import ... 后，三种启动方式都成立：
+#   python run_web.py（本仓库用法）
+#   python wq_web/run_web.py（桌面端源码目录的用法）
+#   python -m wq_web.server
+from wq_web import workdaddy_proxy as _wd  # noqa: E402  积分签到：WorkDaddy 本地服务代理
 
 from wq_engine.api.client import AuthError  # noqa: E402
 from wq_engine.arc import ARC_DIR, ArcRunner, build_inventory, fetch_alphas_by_ids  # noqa: E402
