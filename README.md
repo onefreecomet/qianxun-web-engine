@@ -66,6 +66,86 @@ uv run python -m wq_engine.cli run --config inputs/first_order_usa.yaml
 uv run python -m wq_engine.ui.main_window
 ```
 
+## 积分签到页（web · `/credits`）的使用与依赖
+
+> ### ⚠️ 这一页不是纯网页功能，它依赖本机安装过 WorkDaddy 桌面客户端
+>
+> **没装 WorkDaddy**：`/credits` 拿不到任何数据 —— 健康检查返回
+> `{"ok":false,"dataDir":null,"degradedUsable":false}`，账号接口返回
+> `503 {"error":"WorkDaddy 数据目录里没有可用的账号备份"}`，页面显示「未连接」红条。
+> 但页面本身仍能打开（HTTP 200），**其余页面（指挥中心 `/`、模拟器 `/simulator`）
+> 完全不受影响**，不会因此报错或起不来（已实测：三页 + `/api/quota`、`/api/batches`、
+> `/api/stats` 全部 200，启动日志零错误）。
+>
+> **装过但没运行**：仍可用，但会降级（见下表），代价是「今日用量」不可用、
+> token 过期时需回客户端续期。
+>
+> 也就是说：**只想要 alpha 挖掘与回测功能，可以不装 WorkDaddy**；
+> 想用积分签到页，才需要它。
+
+### 这一页做什么
+
+把本机 WorkDaddy 客户端里**已登录的账号**读出来，一屏展示每个账号的积分余额、
+过期时间与「今日用量」，并支持一键批量领取每日签到积分。
+
+### 依赖什么：两条取数通道
+
+| | 主通道 | 降级通道 |
+|---|---|---|
+| 触发条件 | WorkDaddy 客户端**正在运行** | 客户端**装过但没运行** |
+| 取数方式 | 转发 WorkDaddy daemon 本地 API（`127.0.0.1:<ui-port>`，`x-workdaddy-token` 认证） | 直接读 `accounts/*.info` 里的 `accessToken`，直连官方接口 |
+| 页面状态 | 绿点 `已连接 · N 账号 · :端口` | 黄点 `降级模式` |
+| 代价 | 无 | **「今日用量」不可用**；token 过期必须**回客户端续期**，本页不会替你刷新 |
+
+两条通道都要求存在这个目录（Windows）：
+
+```
+%APPDATA%\WorkDaddy\
+├── accounts\*.info      # 账号与登录凭据 —— 两条通道都要读
+├── .api-token           # 主通道：daemon 本地 API 令牌
+└── ui-port.json         # 主通道：daemon 监听端口
+```
+
+所以**最小要求是「WorkDaddy 装过、且至少登录过一个账号」**；
+想要完整功能（含今日用量）则需要客户端正在运行。
+
+### 已知限制
+
+- **仅 Windows**。数据目录定位写死了 `%APPDATA%\WorkDaddy` 与
+  `~/AppData/Roaming/WorkDaddy`（见 `wq_web/workdaddy_proxy.py` 的 `_candidate_data_dirs()`），
+  macOS / Linux 上这一页不可用。
+- **需要能直连官方接口**。降级通道会访问 `www.workbuddy.cn`、`www.codebuddy.cn`
+  等域名；受限网络下签到会失败。
+- **不自动续期 token**。过期只报「登录身份过期」，需回 WorkDaddy 重新登录。
+  这是**刻意**的：刷新 token 要 POST 官方 auth 接口并回写 `.info`，属于越界操作。
+- **不写 WorkDaddy 的任何状态**。本页只读它的配置，不改账号状态、不写它的签到缓存。
+  降级通道没有每日缓存，重复点「领取」会重复打接口；官方对已签到返回
+  `10001 今天已签到`，幂等安全，只是多一次请求。
+- **重复运行会共存但不冲突**：daemon 与降级通道各有自己的判定，
+  客户端稍后启动不会导致数据错乱。
+
+### 安全说明
+
+- access token **只在进程内存里拼请求头**，不落盘、不打印、不写日志。
+- 本页不采集、不上传任何凭据到第三方；也不修改 WorkDaddy 的配置或账号状态。
+
+### 排障对照表
+
+页面状态由 `/api/xgj/health` 的返回字段决定，按信号定位：
+
+| 页面显示 | 接口信号 | 原因 | 处理 |
+|---|---|---|---|
+| 红条 ·「未连接」+ `未找到 WorkDaddy 数据目录` | `dataDir: null`、`degradedUsable: false` | 没装 WorkDaddy，或装在非默认位置 | 安装并登录 WorkDaddy 客户端 |
+| 红条 ·「未连接」+ 其他 daemon 错误 | `degradedUsable: false` | 装过但没运行，且没有可用账号备份 | 启动 WorkDaddy 客户端 |
+| 黄点 ·「降级模式」 | `degradedUsable: true`、`backupCount: N` | 客户端没运行，走的是直连通道 | 想恢复「今日用量」就启动客户端 |
+| 某账号「登录身份过期」 | — | 该账号 token 过期 | 回 WorkDaddy 重新登录该账号 |
+| 签到报网络错误 | — | 官方接口不可达 | 检查网络/代理是否放行上述域名 |
+
+> 自查接口（只读，返回上面三态所需的全部字段）：
+> `curl http://127.0.0.1:8090/api/xgj/health`
+> 字段含义：`ok`（daemon 是否可达）、`dataDir`（定位到的数据目录，`null` = 没找到）、
+> `daemonPort`、`hasToken`、`error`、`degradedUsable`（降级通道是否可用）、`backupCount`（可用账号备份数）。
+
 ## 进展记录
 
 - [2026-08-11] 全量代码审查（4 路并行）发现 47 项问题并全部修复（git commit c152256）：
