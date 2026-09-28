@@ -48,9 +48,12 @@
       </div>
 
       <div class="hero-stats" id="statCards">
-        <div class="gmetric gmetric-live" id="todaySubmittedCard">
+        <div class="gmetric gmetric-live gmetric-clickable" id="todaySubmittedCard"
+             role="button" tabindex="0"
+             title="点击查看当天已提交的 alpha 明细列表（按美东日界归日）">
           <span class="gmetric-label">Today Submitted <i class="gsrc gsrc-live" title="BRAIN 当日已提交 alpha 数（按美东日界起算：夏令时对应北京时间 12:00 重置，冬令时顺延为 13:00）">B</i></span>
           <span class="gmetric-value" id="gTodaySubmitted">—</span>
+          <span class="gmetric-spark" aria-hidden="true"></span>
         </div>
         <div class="gmetric gmetric-live gmetric-clickable" id="osmosisCard"
              role="button" tabindex="0"
@@ -741,6 +744,54 @@
           <li><b data-sig-note="detail">—</b> = 上面这份明细清单的条数（逐条拉取的真实数据，最可靠）</li>
         </ul>
         结论：卡片的 <b data-sig-note="card">—</b> 不是「平台数」的全集，本清单以逐条明细（<b data-sig-note="detail">—</b>）为准。以上数字均由接口实时填充，不写死快照。
+      </div>
+    </div>
+  </div>
+
+  <!-- 今日提交 Alpha 明细弹窗（点顶部 Today Submitted 卡片打开） -->
+  <div class="osm-modal" id="todayModal" hidden>
+    <div class="osm-modal-backdrop" data-today-close></div>
+    <div class="osm-modal-card osm-modal-card-wide" role="dialog" aria-modal="true" aria-labelledby="todayModalTitle">
+      <button class="osm-modal-close" id="todayModalClose" title="关闭（Esc）">×</button>
+      <div class="osm-modal-head">
+        <span class="osm-modal-eyebrow">Today Submitted</span>
+        <h3 class="osm-modal-title" id="todayModalTitle">今日提交的 Alpha</h3>
+        <p class="osm-modal-sub" id="todayModalSub">正在读取 BRAIN…</p>
+      </div>
+
+      <div class="sig-toolbar">
+        <div class="sig-filters" id="todayRegionFilters"></div>
+        <div class="sig-toolbar-right">
+          <button class="sig-btn" id="todayRefreshBtn" title="强制重新拉取 BRAIN 已提交 alpha（绕过 120s 缓存）">⟳ 同步</button>
+        </div>
+      </div>
+
+      <div class="sig-table-wrap">
+        <table class="sig-table">
+          <thead>
+            <tr>
+              <th class="sig-th-id">Alpha ID</th>
+              <th title="按美东时间（America/New_York）显示提交时刻，与 BRAIN 平台一致">提交时间</th>
+              <th>区域</th>
+              <th>设置</th>
+              <th class="sig-th-num">Sharpe</th>
+              <th class="sig-th-num">Fitness</th>
+              <th class="sig-th-num">Returns</th>
+              <th class="sig-th-num">Turnover</th>
+              <th class="sig-th-num">Margin</th>
+              <th class="sig-th-py">金字塔</th>
+              <th>状态</th>
+            </tr>
+          </thead>
+          <tbody id="todayTbody"></tbody>
+        </table>
+        <div class="sig-loading" id="todayLoading">正在读取 BRAIN…</div>
+      </div>
+
+      <div class="osm-modal-note" id="todayModalNote">
+        本清单从「已提交 alpha 明细」（<code>GET /users/self/alphas</code>，状态非 UNSUBMITTED / IS_FAIL）
+        中按<b>美东日期</b>筛出当天提交的条目，与顶部 Today Submitted 卡片同口径。
+        卡片数字是 BRAIN 服务端实时 count，明细受 120 秒缓存影响可能略有滞后，若刚提交完请点「⟳ 同步」。
       </div>
     </div>
   </div>

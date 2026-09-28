@@ -1956,6 +1956,22 @@ function sigDay(iso) {
   return `${p.year}-${p.month}-${p.day}`;
 }
 
+/** 提交时刻：按美东时间出 HH:MM，供「今日提交」弹窗用（同一天内日期列没信息量）。
+ *
+ *  必须显式 hourCycle:'h23'。只写 hour12:false 时 Intl 在部分实现里会落到
+ *  h24 循环，凌晨 0 点渲染成 "24:xx"，看着像第二天。 */
+const SIG_TIME_FMT = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'America/New_York',
+  hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+});
+
+function sigTime(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  return SIG_TIME_FMT.format(d);
+}
+
 function sigEscape(s) {
   return String(s == null ? '' : s)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -2014,13 +2030,20 @@ function sigPyramidsHtml(a) {
   return `<span class="sig-py-wrap">${shown}${restHtml}</span>`;
 }
 
-function sigRowHtml(a) {
+/** 表格行模板：Signals 弹窗与「今日提交」弹窗共用。
+ *
+ *  opts.time = true 时，第 2 列由「提交日（YYYY-MM-DD）」换成「提交时刻（HH:MM）」，
+ *  因为今日提交的 alpha 都在同一天，日期列没有信息量。 */
+function sigRowHtml(a, opts = {}) {
   const st = a.status === 'ACTIVE' ? 'is-active' : 'is-decom';
+  const when = opts.time
+    ? `<td class="sig-num dim" title="${sigEscape(a.dateSubmitted || '')}">${sigTime(a.dateSubmitted)}</td>`
+    : `<td class="sig-num dim">${sigDay(a.dateSubmitted)}</td>`;
   return `<tr>
     <td><a class="sig-id" href="/simulator?alpha=${encodeURIComponent(a.id || '')}"
            target="_blank" rel="noopener"
            title="在新标签打开 Alpha Simulator 加载 ${sigEscape(a.id)}">${sigEscape(a.id || '—')}</a></td>
-    <td class="sig-num dim">${sigDay(a.dateSubmitted)}</td>
+    ${when}
     <td><span class="sig-region">${sigEscape(a.region || '—')}</span></td>
     <td class="sig-settings-cell">${sigSettingsHtml(a)}</td>
     <td class="sig-num ${sigClass('sharpe', a.isSharpe)}">${fmtNum(a.isSharpe, 2)}</td>
@@ -2333,6 +2356,165 @@ function closeSignalsModal() {
       sigRenderTable();
     });
   }
+})();
+
+// ==================== 今日提交 Alpha 弹窗（点 Today Submitted 卡片打开） ====================
+// 数据不另开接口：直接复用 Signals 已拉到的「已提交 alpha 明细」（sigState.items），
+// 前端按美东日期过滤当天。好处是口径与 Signals 弹窗完全一致，也不会多打一次 BRAIN。
+const todayModal = $('todayModal');
+const TODAY_COLS = 11;   // 与表头列数一致（空态 colspan 用）
+const todayState = { region: '' };
+
+/** 当前美东日期 YYYY-MM-DD。与 sigDay 共用 SIG_DAY_FMT，保证筛出来的就是「今天」。 */
+function todayEstDay() {
+  const p = {};
+  for (const part of SIG_DAY_FMT.formatToParts(new Date())) p[part.type] = part.value;
+  return `${p.year}-${p.month}-${p.day}`;
+}
+
+/** 今日提交的 alpha：按美东日期过滤，再按提交时刻倒序（最新的在最上面）。 */
+function todayRows() {
+  const day = todayEstDay();
+  const ts = (a) => {
+    const t = Date.parse(a.dateSubmitted || '');
+    return Number.isFinite(t) ? t : 0;
+  };
+  return (sigState.items || [])
+    .filter((a) => sigDay(a.dateSubmitted) === day)
+    .sort((x, y) => ts(y) - ts(x));
+}
+
+/** 区域筛选 chips（只列今天实际出现过的区域）。 */
+function todayRenderChips(all) {
+  const box = $('todayRegionFilters');
+  if (!box) return;
+  const byRegion = {};
+  for (const a of all) {
+    const r = a.region || '(未知)';
+    byRegion[r] = (byRegion[r] || 0) + 1;
+  }
+  let html = `<span class="sig-chip${todayState.region ? '' : ' active'}" data-region="">`
+    + `全部 <span class="sig-chip-count">${all.length}</span></span>`;
+  html += Object.entries(byRegion).sort((a, b) => b[1] - a[1]).map(([r, c]) =>
+    `<span class="sig-chip${todayState.region === r ? ' active' : ''}" data-region="${sigEscape(r)}">`
+    + `${sigEscape(r)} <span class="sig-chip-count">${c}</span></span>`
+  ).join('');
+  box.innerHTML = html;
+  box.querySelectorAll('.sig-chip').forEach((el) => {
+    el.addEventListener('click', () => {
+      todayState.region = el.dataset.region || '';
+      todayRender();
+    });
+  });
+}
+
+function todayRender() {
+  const tbody = $('todayTbody');
+  const loading = $('todayLoading');
+  if (!tbody) return;
+  if (loading) loading.hidden = true;
+
+  // 加载失败要和「今天确实没提交」区分开，否则空表会被误读成 0 条
+  if (sigState.error) {
+    tbody.innerHTML = `<tr><td colspan="${TODAY_COLS}" class="sig-loading">`
+      + `读取失败：${sigEscape(sigState.error)}</td></tr>`;
+    const sub = $('todayModalSub');
+    if (sub) sub.textContent = '读取失败：' + sigState.error;
+    const box = $('todayRegionFilters');
+    if (box) box.innerHTML = '';
+    return;
+  }
+
+  const all = todayRows();
+  const rows = todayState.region
+    ? all.filter((a) => (a.region || '(未知)') === todayState.region)
+    : all;
+
+  todayRenderChips(all);
+
+  tbody.innerHTML = rows.length
+    ? rows.map((a) => sigRowHtml(a, { time: true })).join('')
+    : `<tr><td colspan="${TODAY_COLS}" class="sig-loading">`
+      // ⚠️ 「今天一条都没有」和「筛选后没有匹配」是两回事，文案不能共用：
+      // 用后者的话，用户点了个空区域会看到「今天还没有提交任何 alpha」，直接把真实数据藏起来。
+      + (all.length
+        ? `没有匹配的 alpha（当前筛选：${sigEscape(todayState.region || '全部')}）`
+        : `今天（美东 ${todayEstDay()}）还没有提交任何 alpha`)
+      + `</td></tr>`;
+
+  const sub = $('todayModalSub');
+  if (sub) {
+    const parts = [`美东 ${todayEstDay()}`, `明细 ${all.length} 条`];
+    // 卡片数字是 BRAIN 服务端实时 count，明细受 120s 缓存影响，两者可能短暂不一致，并排展示
+    const cardEl = $('gTodaySubmitted');
+    const cardTxt = cardEl ? cardEl.textContent.trim() : '';
+    if (/^\d+$/.test(cardTxt)) parts.push(`卡片 ${cardTxt}`);
+    if (rows.length !== all.length) parts.push(`当前筛选 ${rows.length} 条`);
+    sub.textContent = parts.join('　·　');
+  }
+}
+
+async function openTodayModal() {
+  if (!todayModal) return;
+  todayModal.hidden = false;
+  const card = todayModal.querySelector('.osm-modal-card');
+  if (card) card.scrollTop = 0;
+  const loading = $('todayLoading');
+  if (loading) loading.hidden = false;
+  todayState.region = '';
+
+  // 复用 Signals 的加载逻辑（内含服务端 120s 缓存），避免重复请求 BRAIN
+  if (!sigState.loaded || sigState.error) {
+    await sigLoad();
+  }
+  todayRender();
+}
+
+function closeTodayModal() {
+  if (todayModal) todayModal.hidden = true;
+}
+
+(() => {
+  const card = $('todaySubmittedCard');
+  if (card) {
+    card.addEventListener('click', openTodayModal);
+    card.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        openTodayModal();
+      }
+    });
+  }
+
+  // 手动同步：强制绕过缓存重拉 BRAIN 已提交 alpha（今天刚提交完时用）
+  const refreshBtn = $('todayRefreshBtn');
+  if (refreshBtn) {
+    refreshBtn.addEventListener('click', async () => {
+      if (refreshBtn.disabled) return;
+      const old = refreshBtn.textContent;
+      refreshBtn.disabled = true;
+      refreshBtn.textContent = '同步中…';
+      try {
+        await sigLoad(true);
+        todayRender();
+        toast('已同步 BRAIN 已提交 alpha', '');
+      } catch (e) {
+        toast('同步失败：' + (e.message || e), '');
+      } finally {
+        refreshBtn.disabled = false;
+        refreshBtn.textContent = old;
+      }
+    });
+  }
+
+  if (!todayModal) return;
+  const closeBtn = $('todayModalClose');
+  if (closeBtn) closeBtn.addEventListener('click', closeTodayModal);
+  const backdrop = todayModal.querySelector('[data-today-close]');
+  if (backdrop) backdrop.addEventListener('click', closeTodayModal);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !todayModal.hidden) closeTodayModal();
+  });
 })();
 
 // 支持 ?signals=1 直达：进页面就弹清单
