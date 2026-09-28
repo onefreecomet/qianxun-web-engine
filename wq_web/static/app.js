@@ -19,6 +19,10 @@ const fmtSharpe = (v) => {
   return `<span class="sharpe-zero">0.00</span>`;
 };
 const fmtBps = (v) => v == null ? '—' : (Number(v) * 10000).toFixed(1);
+// 换手率按百分比显示：0.123 → 12.3%
+const fmtPct = (v, d = 1) => (Number(v) * 100).toFixed(d) + '%';
+// 备忘录数值列：null 显示灰破折号（不染该列主题色），否则交给传入的格式化器
+const memoCell = (v, fn) => v == null ? '<span class="val-na">—</span>' : fn(v);
 // 把 UTC 时间戳转成北京时间（UTC+8）显示，避免直接截 UTC 字符串
 const fmtCST = (iso, withSec = false) => {
   if (!iso) return '';
@@ -118,7 +122,9 @@ async function loadStats() {
 // 前端只负责把「余量 / 上限 / 重置倒计时」画准，并诚实标注来源与过期态。
 // 三种态共用 paintQuota 一套 DOM 写入，避免真实值/过期/兜底各写一遍导致样式走形。
 
-const QUOTA_FALLBACK_LIMIT = 5000; // 平台每日回测配额上限（响应头口径）
+// 平台每日回测配额上限：仅当接口没给 limit 时的兜底值（正常情况一律以接口返回为准）。
+// HTML 里的 5000 占位已改成 `--`，避免「三处 5000 各自硬编码、改一处忘两处」。
+const QUOTA_FALLBACK_LIMIT = 5000;
 
 function fmtClock(sec) {
   // 倒计时用 HH:MM:SS：秒位每秒跳动，页面看着是活的；
@@ -140,6 +146,8 @@ function paintQuota(opt) {
   const remaining = limit != null && opt.remaining != null ? opt.remaining : null;
   const hasNum = remaining != null;
   const used = opt.used != null ? opt.used : (hasNum ? Math.max(limit - remaining, 0) : null);
+  // ⚠️ pct 是「剩余占比」（remaining / limit），不是已用占比。
+  // 页面标签叫「剩余率」，环形弧长与 ≤20% 告警都按剩余口径，别按已用理解。
   const pct = hasNum ? remaining / limit : null;
   const showLimit = limit != null ? limit : (window._quotaLastLimit || QUOTA_FALLBACK_LIMIT);
   if (limit != null) window._quotaLastLimit = limit;
@@ -813,9 +821,9 @@ function renderMemos() {
                 <td><span class="alpha-id-wrap">${alphaLink(r.alpha_id)}</span></td>
                 <td><span class="status-badge status-${(r.status || '').toLowerCase().startsWith('active') ? 'completed' : 'pending'}">${r.status || '—'}</span></td>
                 <td>${fmtSharpe(r.sharpe)}</td>
-                <td>${fmtNum(r.fitness)}</td>
-                <td>${fmtNum(r.turnover, 3)}</td>
-                <td>${fmtBps(r.margin)}</td>
+                <td class="m-fitness">${memoCell(r.fitness, fmtNum)}</td>
+                <td class="m-tvr">${memoCell(r.turnover, fmtPct)}</td>
+                <td class="m-margin">${memoCell(r.margin, fmtBps)}</td>
                 <td class="themes-cell" style="min-width:280px">
                   <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:4px">${themeChips || '<span class="muted" style="font-size:11px">无主题</span>'}</div>
                   <div style="display:flex;gap:4px;align-items:center">
@@ -1644,7 +1652,7 @@ async function refreshGlobalMetrics() {
     set('gTodaySubmitted', r.today_submitted == null ? '—' : Number(r.today_submitted).toLocaleString());
     set('gOsmosisRank', r.osmosis_rank == null ? '—' : Number(r.osmosis_rank).toFixed(2));
     set('gVF', r.vf == null ? '—' : Number(r.vf).toFixed(2));
-    set('gCommunity', r.total_payment == null ? '—' : '$' + Number(r.total_payment).toFixed(2));
+    set('gTotalPayment', r.total_payment == null ? '—' : '$' + Number(r.total_payment).toFixed(2));
     set('gSignals', r.signals == null ? '—' : r.signals);
   } catch (e) {
     // 静默：顶栏指标拉取失败不打扰主流程
@@ -2172,17 +2180,34 @@ function sigRenderPager(total, pages) {
   });
 }
 
+// Signals 弹窗说明里的数字必须动态填，不能写死快照。
+// 260928 实测：原先写死 80 / 87 / 136，当时真实值已是卡片 107、明细 167，
+// 那段本意是「解释三个口径为何对不上」的说明，反而因为数字过时而误导。
+// Genius 那个数标准 API 拿不到，故 HTML 里留「—」不填，写明需自行到官网核对。
+function fillSigNote() {
+  const card = sigState.consultantCount;
+  const detail = sigState.count == null ? sigState.items.length : sigState.count;
+  const put = (key, val) => {
+    document.querySelectorAll(`[data-sig-note="${key}"]`).forEach((el) => {
+      el.textContent = val == null ? '—' : val;
+    });
+  };
+  put('card', card);
+  put('detail', detail);
+}
+
 function sigUpdateSub(filteredTotal) {
   const sub = $('sigModalSub');
   if (!sub) return;
-  const consultant = sigState.consultantCount;   // 顶部卡片 = submissionsCount (80)
-  const n = sigState.count == null ? sigState.items.length : sigState.count;  // 明细 136
+  const consultant = sigState.consultantCount;   // 顶部卡片 = submissionsCount
+  const n = sigState.count == null ? sigState.items.length : sigState.count;  // 明细条数
   const parts = [`明细 ${n} 条`];
-  // 三个口径并排，避免再被误认为「80 就是平台数」
+  // 三个口径并排，避免再被误认为「卡片数就是平台全集」
   if (consultant != null) parts.push(`卡片 ${consultant}`);
-  parts.push('Genius 87');
+  parts.push('Genius 另算（需到官网核对）');
   if (filteredTotal != null && filteredTotal !== n) parts.push(`当前筛选 ${filteredTotal} 条`);
   sub.textContent = parts.join('　·　');
+  fillSigNote();
 }
 
 function sigRenderEmpty(msg) {
@@ -2313,300 +2338,8 @@ function closeSignalsModal() {
 // 支持 ?signals=1 直达：进页面就弹清单
 // 首页不做 ?signals=1 直达，已移除（原 simulator 行为）
 
-// =====================================================================
-// Total Payment 弹窗：每日 Base Payment 折线图
-// 横向滑动（拖拽/滚轮）+ 数据点磁吸 + 顶部 odometer 滚动计数器联动
-// 数据：/api/simulator/base-payment（BRAIN /users/self/activities/base-payment）
-// =====================================================================
-const payModal = $('payModal');
-const payState = {
-  dates: [],          // 统一日期轴 [date,...]（base + submissions 并集）
-  baseMap: {},        // {date: value}
-  subMap: {},         // {date: count}
-  hoverIdx: null,
-  wrap: null,
-  cvBase: null, ctxBase: null,
-  cvSub: null, ctxSub: null,
-  dpr: 1,
-  W: 0,
-  H1: 240, H2: 150,
-  geom: null,
-};
-
-function openPayModal() {
-  if (!payModal) return;
-  payModal.hidden = false;
-  const card = payModal.querySelector('.osm-modal-card');
-  if (card) card.scrollTop = 0;
-  $('payModalSub').textContent = '正在读取 BRAIN…';
-  api('/api/simulator/base-payment').then((r) => {
-    if (!r.ok) throw new Error(r.error || '接口失败');
-    const baseRecs = r.records || [];
-    const subRecs = r.sub_records || [];
-    payState.baseMap = {};
-    baseRecs.forEach((x) => { payState.baseMap[x[0]] = Number(x[1]); });
-    payState.subMap = {};
-    subRecs.forEach((x) => { payState.subMap[x[0]] = Number(x[1]); });
-    const set = new Set();
-    baseRecs.forEach((x) => set.add(x[0]));
-    subRecs.forEach((x) => set.add(x[0]));
-    payState.dates = Array.from(set).sort();
-    if (!payState.dates.length) throw new Error('无数据');
-    renderPaySummary(r);
-    setupPayCanvases();
-    payState.hoverIdx = payState.dates.length - 1;   // 默认最新一天
-    drawPayChart();
-    drawSubChart();
-    setPayOdo(payState.hoverIdx, true);
-    $('payModalSub').textContent = `BRAIN base-payment / submissions 活动 · 共 ${payState.dates.length} 天 · ${r.currency || 'USD'}`;
-  }).catch((e) => {
-    $('payModalSub').textContent = '读取失败：' + (e.message || e);
-  });
-}
-
-function renderPaySummary(r) {
-  const f = (o) => (o && o.value != null) ? '$' + Number(o.value).toFixed(2) : '—';
-  const g = (o) => (o && o.value != null) ? Number(o.value) : '—';
-  $('paySummary').innerHTML =
-    `<span>本季 <b>${f(r.current)}</b></span>` +
-    `<span>上季 <b>${f(r.previous)}</b></span>` +
-    `<span>YTD <b>${f(r.ytd)}</b></span>` +
-    `<span>昨日 <b>${f(r.yesterday)}</b></span>` +
-    `<span class="pay-sum-total">BP 累计 <b>${f(r.total)}</b></span>` +
-    `<span class="pay-sum-total">提交累计 <b>${g(r.sub_total)}</b></span>`;
-}
-
-function setupPayCanvases() {
-  const wrap = document.querySelector('.pay-charts');
-  payState.wrap = wrap;
-  const dpr = window.devicePixelRatio || 1;
-  payState.dpr = dpr;
-  const SPACING = 44;
-  const W = Math.max(wrap.clientWidth, payState.dates.length * SPACING);
-  payState.W = W;
-  const cv1 = $('payChart'), cv2 = $('subChart');
-  [cv1, cv2].forEach((cv) => { cv.style.width = W + 'px'; });
-  cv1.style.height = payState.H1 + 'px';
-  cv1.width = Math.round(W * dpr); cv1.height = Math.round(payState.H1 * dpr);
-  cv2.style.height = payState.H2 + 'px';
-  cv2.width = Math.round(W * dpr); cv2.height = Math.round(payState.H2 * dpr);
-  payState.cvBase = cv1; payState.ctxBase = cv1.getContext('2d');
-  payState.cvSub = cv2; payState.ctxSub = cv2.getContext('2d');
-  const padL = 46, padR = 18;
-  const SP = payState.dates.length > 1 ? (W - padL - padR) / (payState.dates.length - 1) : 0;
-  payState.geom = { xOf: (i) => padL + i * SP, SP, n: payState.dates.length, padL, padR };
-  wrap.scrollLeft = Math.max(0, W - wrap.clientWidth);  // 默认定位到最新一天
-}
-
-function drawPayChart() {
-  const cv = payState.cvBase; if (!cv) return;
-  const ctx = payState.ctxBase; const dpr = payState.dpr;
-  const W = payState.W, H = payState.H1;
-  const g = payState.geom;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, W, H);
-  const padT = 16, padB = 26;
-  const plotW = W - g.padL - g.padR, plotH = H - padT - padB;
-  const vals = payState.dates.map((d) => payState.baseMap[d]).filter((v) => v != null);
-  if (!vals.length) return;
-  // 固定刻度标尺：每格 = stepAmt 美元（当前金额小，stepAmt=$0.5），格子高度即可读出金额
-  const dataMax = Math.max.apply(null, vals);
-  const stepAmt = (() => { let s = 0.5; while (dataMax / s > 8) s *= 2; return s; })();
-  const vmax = Math.max(stepAmt, Math.ceil(dataMax / stepAmt) * stepAmt), vmin = 0;
-  const yOf = (v) => padT + plotH - ((v - vmin) / (vmax - vmin)) * plotH;
-  g.yBase = yOf;
-  // 网格
-  ctx.font = '13px "IBM Plex Sans", sans-serif'; ctx.textBaseline = 'middle';
-  const nSteps = Math.round(vmax / stepAmt);
-  for (let k = 0; k <= nSteps; k++) {
-    const v = k * stepAmt; const y = yOf(v);
-    ctx.strokeStyle = k === 0 ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.07)';
-    ctx.beginPath(); ctx.moveTo(g.padL, y); ctx.lineTo(W - g.padR, y); ctx.stroke();
-    ctx.fillStyle = 'rgba(200,214,235,0.65)'; ctx.textAlign = 'right';
-    ctx.fillText('$' + v.toFixed(stepAmt >= 1 ? 0 : 1), g.padL - 8, y);
-  }
-  // 面积 + 折线（仅 baseMap 有值点）
-  const pts = [];
-  payState.dates.forEach((d, i) => { if (payState.baseMap[d] != null) pts.push([i, payState.baseMap[d]]); });
-  if (pts.length > 1) {
-    const grad = ctx.createLinearGradient(0, padT, 0, padT + plotH);
-    grad.addColorStop(0, 'rgba(34,211,238,0.28)');
-    grad.addColorStop(1, 'rgba(34,211,238,0)');
-    ctx.beginPath(); ctx.moveTo(g.xOf(pts[0][0]), yOf(pts[0][1]));
-    pts.forEach((p) => ctx.lineTo(g.xOf(p[0]), yOf(p[1])));
-    ctx.lineTo(g.xOf(pts[pts.length - 1][0]), padT + plotH);
-    ctx.lineTo(g.xOf(pts[0][0]), padT + plotH); ctx.closePath();
-    ctx.fillStyle = grad; ctx.fill();
-    ctx.strokeStyle = '#22d3ee'; ctx.lineWidth = 2; ctx.lineJoin = 'round';
-    ctx.beginPath();
-    pts.forEach((p, i) => { const x = g.xOf(p[0]), y = yOf(p[1]); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
-    ctx.stroke();
-  }
-  // 数据点
-  payState.dates.forEach((d, i) => {
-    if (payState.baseMap[d] == null) return;
-    const x = g.xOf(i), y = yOf(payState.baseMap[d]);
-    const hot = i === payState.hoverIdx;
-    ctx.beginPath(); ctx.arc(x, y, hot ? 5.5 : 2.4, 0, Math.PI * 2);
-    ctx.fillStyle = hot ? '#fbbf24' : '#22d3ee'; ctx.fill();
-    if (hot) {
-      ctx.strokeStyle = 'rgba(251,191,36,0.9)'; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.arc(x, y, 9, 0, Math.PI * 2); ctx.stroke();
-    }
-  });
-  drawHoverMark(ctx, g, W, H, padT, padB, plotH);
-}
-
-function drawSubChart() {
-  const cv = payState.cvSub; if (!cv) return;
-  const ctx = payState.ctxSub; const dpr = payState.dpr;
-  const W = payState.W, H = payState.H2;
-  const g = payState.geom;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, W, H);
-  const padT = 14, padB = 26;
-  const plotW = W - g.padL - g.padR, plotH = H - padT - padB;
-  // 固定 5 格：普通 alpha 一天最多 4 个 + super alpha 一天最多 1 个
-  const vmax = 5, vmin = 0;
-  const yOf = (v) => padT + plotH - ((v - vmin) / (vmax - vmin)) * plotH;
-  // 网格（5 格，每格 = 1 个 alpha）
-  ctx.font = '13px "IBM Plex Sans", sans-serif'; ctx.textBaseline = 'middle';
-  for (let k = 0; k <= 5; k++) {
-    const v = k; const y = yOf(v);
-    ctx.strokeStyle = k === 0 ? 'rgba(255,255,255,0.14)' : 'rgba(255,255,255,0.07)';
-    ctx.beginPath(); ctx.moveTo(g.padL, y); ctx.lineTo(W - g.padR, y); ctx.stroke();
-    ctx.fillStyle = 'rgba(200,214,235,0.65)'; ctx.textAlign = 'right';
-    ctx.fillText(String(v), g.padL - 8, y);
-  }
-  // 柱状（按当日提交数，一格一个）
-  const bw = Math.max(3, g.SP * 0.62);
-  payState.dates.forEach((d, i) => {
-    const v = Math.min(payState.subMap[d] || 0, vmax);
-    const x = g.xOf(i) - bw / 2, y = yOf(v);
-    const hot = i === payState.hoverIdx;
-    ctx.fillStyle = hot ? '#fbbf24' : 'rgba(72,184,224,0.82)';
-    ctx.fillRect(x, y, bw, padT + plotH - y);
-  });
-  drawHoverMark(ctx, g, W, H, padT, padB, plotH);
-}
-
-function drawHoverMark(ctx, g, W, H, padT, padB, plotH) {
-  if (payState.hoverIdx == null) return;
-  const i = payState.hoverIdx, x = g.xOf(i);
-  ctx.strokeStyle = 'rgba(251,191,36,0.35)'; ctx.setLineDash([4, 4]); ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, H - padB); ctx.stroke();
-  ctx.setLineDash([]);
-  const date = payState.dates[i];
-  const label = date + (payState.baseMap[date] != null ? '  $' + payState.baseMap[date].toFixed(2) : '');
-  ctx.font = '14px "IBM Plex Sans", sans-serif';
-  const tw = ctx.measureText(label).width + 18;
-  let tx = x - tw / 2; tx = Math.max(g.padL, Math.min(W - g.padR - tw, tx));
-  const ty = padT;
-  ctx.fillStyle = 'rgba(15,23,33,0.94)'; roundRect(ctx, tx, ty, tw, 24, 6); ctx.fill();
-  ctx.fillStyle = '#fbbf24'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-  ctx.fillText(label, tx + 9, ty + 12);
-}
-
-function roundRect(ctx, x, y, w, h, r) {
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.arcTo(x + w, y, x + w, y + h, r);
-  ctx.arcTo(x + w, y + h, x, y + h, r);
-  ctx.arcTo(x, y + h, x, y, r);
-  ctx.arcTo(x, y, x + w, y, r);
-  ctx.closePath();
-}
-
-function xToIdx(x) {
-  const g = payState.geom;
-  if (!g || g.SP === 0) return null;
-  const i = Math.round((x - g.padL) / g.SP);
-  return (i >= 0 && i < g.n) ? i : null;
-}
-
-// odometer：数字滚动计数器（easeOutCubic 补间，支持小数/整数）
-function animateNum(el, from, to, instant, dec) {
-  if (instant) {
-    el.textContent = dec ? to.toFixed(dec) : String(Math.round(to));
-    el.dataset.v = dec ? to : Math.round(to);
-    return;
-  }
-  if (el._anim) cancelAnimationFrame(el._anim);
-  const t0 = performance.now();
-  const dur = 450;
-  const step = (now) => {
-    const k = Math.min(1, (now - t0) / dur);
-    const e = 1 - Math.pow(1 - k, 3);
-    const v = from + (to - from) * e;
-    el.textContent = dec ? v.toFixed(dec) : String(Math.round(v));
-    if (k < 1) el._anim = requestAnimationFrame(step);
-    else { el.dataset.v = dec ? to : Math.round(to); }
-  };
-  el._anim = requestAnimationFrame(step);
-}
-
-function setPayOdo(idx, instant) {
-  const date = payState.dates[idx];
-  if (!date) return;
-  $('payOdoDate').textContent = date;
-  const baseEl = $('payOdoVal'), subEl = $('payOdoSub');
-  const baseTo = payState.baseMap[date];
-  const subTo = payState.subMap[date] || 0;
-  if (baseTo == null) { baseEl.textContent = '—'; baseEl.dataset.v = ''; }
-  else animateNum(baseEl, parseFloat(baseEl.dataset.v || '0'), baseTo, instant, 2);
-  animateNum(subEl, parseInt(subEl.dataset.v || '0', 10), subTo, instant, 0);
-}
-
-function bindPayInteractions() {
-  // canvas 元素常驻 DOM，直接按 id 取，避免 cvBase/cvSub 在绑定时尚为 null 而导致交互失效
-  const cv1 = $('payChart'), cv2 = $('subChart');
-  const wrap = document.querySelector('.pay-charts');
-  if (!wrap) return;
-  // 横向滚轮（绑一次即可）
-  wrap.addEventListener('wheel', (e) => {
-    if (e.deltaY !== 0) { wrap.scrollLeft += e.deltaY; e.preventDefault(); }
-  }, { passive: false });
-  [cv1, cv2].forEach((cv) => {
-    if (!cv) return;
-    let dragging = false, dragX = 0, scroll0 = 0;
-    cv.addEventListener('mousedown', (e) => {
-      dragging = true; dragX = e.clientX; scroll0 = wrap.scrollLeft;
-      cv.style.cursor = 'grabbing';
-    });
-    cv.addEventListener('mousemove', (e) => {
-      if (dragging) { wrap.scrollLeft = scroll0 - (e.clientX - dragX); return; }
-      const rect = cv.getBoundingClientRect();
-      const idx = xToIdx(e.clientX - rect.left);
-      if (idx != null && idx !== payState.hoverIdx) {
-        payState.hoverIdx = idx;
-        drawPayChart(); drawSubChart(); setPayOdo(idx);
-      }
-    });
-  });
-  window.addEventListener('mouseup', () => {
-    [cv1, cv2].forEach((cv) => { if (cv) cv.style.cursor = 'default'; });
-  });
-}
-
-(function bindPayModal() {
-  if (!payModal) return;
-  const card = $('totalPaymentCard');
-  if (card) {
-    card.addEventListener('click', openPayModal);
-    card.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openPayModal(); }
-    });
-  }
-  const closeBtn = $('payModalClose');
-  if (closeBtn) closeBtn.addEventListener('click', () => { payModal.hidden = true; });
-  const backdrop = payModal.querySelector('[data-pay-close]');
-  if (backdrop) backdrop.addEventListener('click', () => { payModal.hidden = true; });
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && !payModal.hidden) payModal.hidden = true;
-  });
-  // 图表交互只绑定一次（canvas 元素常驻 DOM）
-  bindPayInteractions();
-})();
+// Total Payment 弹窗已抽到 static/pay-modal.js（两页共用一份，260928）
+PayModal.init({ $: $, api: api });
 
 // 支持 ?pay=1 直达
 // 首页不做 ?pay=1 直达，已移除（原 simulator 行为）

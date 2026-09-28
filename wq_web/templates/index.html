@@ -66,8 +66,8 @@
         <div class="gmetric gmetric-sec gmetric-clickable" id="totalPaymentCard"
              role="button" tabindex="0"
              title="点击查看每日 Base Payment 趋势（BRAIN base-payment 活动）">
-          <span class="gmetric-label">Total Payment <i class="gsrc gsrc-live" title="来自 BRAIN base-payment 活动（全部累计 total.value）">B</i></span>
-          <span class="gmetric-value" id="gCommunity">—</span>
+          <span class="gmetric-label">Total Payment <i class="gsrc gsrc-live" title="来自 BRAIN base-payment 活动。v3 口径 total.value = Regular（普通 alpha）+ Super（SuperAlpha），与官网 /profile/performance 的「Total Payment (All Time)」一致">B</i></span>
+          <span class="gmetric-value" id="gTotalPayment">—</span>
           <span class="gmetric-spark" aria-hidden="true"></span>
         </div>
         <div class="gmetric gmetric-sec gmetric-clickable" id="signalsCard"
@@ -170,19 +170,19 @@
                 <div class="quota-dial-center">
                   <span class="quota-dial-cap">剩余</span>
                   <span class="quota-dial-num" id="quotaRemain">--</span>
-                  <span class="quota-dial-sub">/ <b id="quotaLimit">5000</b></span>
+                  <span class="quota-dial-sub">/ <b id="quotaLimit">--</b></span>
                 </div>
               </div>
             </div>
 
-            <!-- 已用 / 使用率 -->
+            <!-- 已用 / 剩余率（quotaPct 是 remaining/limit，即剩余占比，不是已用占比） -->
             <div class="quota-stats">
               <div class="quota-stat">
                 <span class="quota-stat-label">已用</span>
                 <span class="quota-stat-value" id="quotaUsed">--</span>
               </div>
               <div class="quota-stat">
-                <span class="quota-stat-label">使用率</span>
+                <span class="quota-stat-label">剩余率</span>
                 <span class="quota-stat-value" id="quotaPct">--</span>
               </div>
             </div>
@@ -195,7 +195,7 @@
               </div>
               <div class="quota-bar-legend">
                 <span class="quota-lg quota-lg-used"><i></i>已用 <b id="quotaBarUsedNum">0</b></span>
-                <span class="quota-lg quota-lg-left"><i></i>剩余 <b id="quotaBarLeftNum">5000</b></span>
+                <span class="quota-lg quota-lg-left"><i></i>剩余 <b id="quotaBarLeftNum">--</b></span>
               </div>
             </div>
 
@@ -736,11 +736,11 @@
         本清单是逐条拉取的明细（<code>GET /users/self/alphas</code>，已提交 = 状态非 UNSUBMITTED / IS_FAIL）。
         注意：同一个账号在 BRAIN 里其实有<b>三个不同的「已提交数」</b>，口径由平台各自定义、互不公开，所以数字必然对不上：
         <ul class="sig-note-list">
-          <li><b>80</b> = 顶部 SIGNALS 卡片，来自 <code>/users/self/consultant</code> 的 <code>submissionsCount</code>（leaderboard 汇总字段，可能延迟刷新）</li>
-          <li><b>87</b> = 你在 Genius 资格页（<code>platform.worldquantbrain.com/genius</code>）看到的 <code>Signals</code>，由 Genius 子系统另算（标准 BRAIN API 拿不到这个数字）</li>
-          <li><b>136</b> = 上面这份明细清单的条数（我拉到的真实数据，最可靠）</li>
+          <li><b data-sig-note="card">—</b> = 顶部 SIGNALS 卡片，来自 <code>/users/self/consultant</code> 的 <code>submissionsCount</code>（leaderboard 汇总字段，可能延迟刷新）</li>
+          <li><b>—</b> = 你在 Genius 资格页（<code>platform.worldquantbrain.com/genius</code>）看到的 <code>Signals</code>，由 Genius 子系统另算。<b>标准 BRAIN API 拿不到这个数字</b>，需自行到官网核对，故此处不写死</li>
+          <li><b data-sig-note="detail">—</b> = 上面这份明细清单的条数（逐条拉取的真实数据，最可靠）</li>
         </ul>
-        结论：卡片的 80 不是「平台数」的全集，它和 Genius 的 87 只是 BRAIN 两个不同的统计口径。本清单以逐条明细（136）为准。
+        结论：卡片的 <b data-sig-note="card">—</b> 不是「平台数」的全集，本清单以逐条明细（<b data-sig-note="detail">—</b>）为准。以上数字均由接口实时填充，不写死快照。
       </div>
     </div>
   </div>
@@ -763,6 +763,10 @@
         </div>
       </div>
       <div class="pay-summary" id="paySummary"></div>
+      <div class="pay-legend-bar">
+        <span><i class="lg-reg"></i>Regular：普通 alpha 的 base payment</span>
+        <span><i class="lg-sup"></i>Super：SuperAlpha 支付</span>
+      </div>
       <div class="pay-charts">
         <div class="pay-chart-block">
           <div class="pay-chart-label">Base Payment（每日）</div>
@@ -779,6 +783,8 @@
 
   <div id="toast" class="toast"></div>
 
+  <!-- Total Payment 弹窗逻辑（两页共用，必须在 app.js 之前加载：app.js 里会调 PayModal.init） -->
+  <script src="/static/pay-modal.js?v={{ static_v }}"></script>
   <script src="/static/app.js?v={{ static_v }}"></script>
 </body>
 </html>

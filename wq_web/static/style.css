@@ -239,7 +239,7 @@ main { position: relative; z-index: 1; max-width: 1400px; margin: 0 auto; paddin
 .quota-dial-sub { font: 500 12px var(--mono); color: var(--text-mute); }
 .quota-dial-sub b { color: var(--text-dim); font-weight: 600; }
 
-/* ---------- 已用 / 使用率 ---------- */
+/* ---------- 已用 / 剩余率 ---------- */
 .quota-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .quota-stat {
   background: var(--bg-2); border: 1px solid var(--border); border-radius: 9px;
@@ -663,9 +663,15 @@ code { background: rgba(56,189,248,0.1); color: var(--accent); padding: 1px 6px;
   background: var(--bg-2); padding: 2px 8px; border-radius: 10px;
 }
 .memo-table { width: 100%; }
-.memo-table th { cursor: pointer; user-select: none; }
+/* 表头字号单独放大：全局 .data-table th 是 11px，备忘录这张表可读性偏弱 */
+.memo-table th { cursor: pointer; user-select: none; font-size: 13px; letter-spacing: 0.6px; }
 .memo-table th:hover { color: var(--accent); }
 .memo-table th .sort-ind { margin-left: 4px; opacity: 0.7; }
+/* 指标列各自主题色，便于横向扫读（Sharpe 沿用涨跌色，见 .sharpe-*） */
+.memo-table .m-fitness { color: #A78BFA; font-weight: 600; }
+.memo-table .m-tvr { color: #F5B544; font-weight: 600; }
+.memo-table .m-margin { color: #34D399; font-weight: 600; }
+.memo-table .val-na { color: var(--text-mute); font-weight: 400; }
 .memo-note-input {
   width: 100%; background: var(--bg-2); border: 1px solid var(--border);
   color: var(--text); padding: 5px 8px; border-radius: 4px;
@@ -1673,6 +1679,29 @@ code { background: rgba(56,189,248,0.1); color: var(--accent); padding: 1px 6px;
   color: var(--text-mute);
   padding: 6px 8px 2px;
   letter-spacing: .3px;
+}
+/* 双线图例（260928：Regular = 普通 alpha 的 base payment，Super = SuperAlpha 支付）
+   ⚠️ 必须放在 .pay-charts 滚动容器之外 —— 图表默认横向滚到最右，
+   放进容器内的图例会连同左侧标签一起被滚出视野。 */
+.pay-legend-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-mute);
+}
+.pay-legend-bar span { display: inline-flex; align-items: center; gap: 6px; }
+.pay-legend-bar i { display: inline-block; width: 12px; height: 3px; border-radius: 2px; }
+.pay-legend-bar i.lg-reg { background: #22d3ee; }
+.pay-legend-bar i.lg-sup { background: #a78bfa; }
+/* Total 累计旁的 Regular / Super 拆分小字 */
+.pay-sum-split {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--text-mute);
+  margin-left: 6px;
+  letter-spacing: 0;
 }
 .pay-chart { display: block; cursor: crosshair; }
 .pay-chart-sub { background: rgba(72,124,205,0.04); }

@@ -1321,6 +1321,29 @@
   padding: 6px 8px 2px;
   letter-spacing: .3px;
 }
+/* 双线图例（260928：Regular = 普通 alpha 的 base payment，Super = SuperAlpha 支付）
+   ⚠️ 必须放在 .pay-charts 滚动容器之外 —— 图表默认横向滚到最右，
+   放进容器内的图例会连同左侧标签一起被滚出视野。 */
+.pay-legend-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-mute);
+}
+.pay-legend-bar span { display: inline-flex; align-items: center; gap: 6px; }
+.pay-legend-bar i { display: inline-block; width: 12px; height: 3px; border-radius: 2px; }
+.pay-legend-bar i.lg-reg { background: #22d3ee; }
+.pay-legend-bar i.lg-sup { background: #a78bfa; }
+/* Total 累计旁的 Regular / Super 拆分小字 */
+.pay-sum-split {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--text-mute);
+  margin-left: 6px;
+  letter-spacing: 0;
+}
 .pay-chart { display: block; cursor: crosshair; }
 .pay-chart-sub { background: rgba(72,124,205,0.04); }
 .pay-odo-meta { display: flex; flex-direction: column; gap: 2px; }

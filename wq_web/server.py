@@ -36,12 +36,12 @@ from fastapi.templating import Jinja2Templates  # noqa: E402
 
 # ⚠️ 必须写成「包内绝对导入」，不能写成 `import workdaddy_proxy`。
 # 原因：后者只在「启动器位于 wq_web/ 目录内」时才成立 —— 那种情况下 Python 会把
-# 脚本所在目录自动加进 sys.path。而本仓库的启动器放在项目根（run_web.py / run_native.py），
+# 脚本所在目录自动加进 sys.path。而仓库版启动器放在项目根（run_web.py / run_native.py），
 # 加进去的是项目根，`import workdaddy_proxy` 就会 ModuleNotFoundError，服务直接起不来
-# （260925 实测：克隆本仓库后 python run_web.py 退出码 1）。
+# （260925 实测：克隆仓库后 python run_web.py 退出码 1）。
 # 写成 from wq_web import ... 后，三种启动方式都成立：
-#   python run_web.py（本仓库用法）
-#   python wq_web/run_web.py（桌面端源码目录的用法）
+#   python wq_web/run_web.py（本机 start_web.bat 的用法）
+#   python run_web.py（仓库版用法）
 #   python -m wq_web.server
 from wq_web import workdaddy_proxy as _wd  # noqa: E402  积分签到：WorkDaddy 本地服务代理
 
@@ -66,6 +66,17 @@ from wq_engine.scheduler.ra_common import (  # noqa: E402  v83 RA 原生
 
 
 # ---------------- 应用初始化 ----------------
+
+# ⚠️ 路由签名约定（260928 定案，改路由前必读）：
+# 凡路由内部会**同步**打 BRAIN 接口的（走 `_client()._request_with_retry`、
+# `_get_base_payment`、`_brain_count_alphas_since`、`_fetch_submitted_alphas` 等），
+# 一律写成同步 `def`，**不要写成 `async def`**。
+# 原因：client 是同步 httpx + `time.sleep`，撞并发上限时单次 sleep ≥30s、最多重试 12 次；
+# FastAPI 会把同步 `def` 路由自动丢进线程池执行，而 `async def` 会占住事件循环，
+# 后者会冻结整个服务（所有 HTTP 与 WebSocket 推送停摆）。
+# 反例（已修）：simulator_platform_stats / simulator_base_payment / simulator_submitted_alphas /
+# simulator_alpha / simulator_fetch_pnl / pnl_sync_stop / osmosis_rules / osmosis_tracks /
+# arc_inventory / memo_sync —— 这些原先都是 `async def`，260928 统一改为 `def`。
 
 WEB_DIR = Path(__file__).resolve().parent
 app = FastAPI(title="千寻 web v81")
@@ -276,6 +287,9 @@ def _static_version() -> str:
             WEB_DIR / "static" / "simulator.css",
             WEB_DIR / "static" / "credits.js",
             WEB_DIR / "static" / "credits.css",
+            # 260928 新增：Total Payment 弹窗共享模块（两页共用，漏了它会导致
+            # 改了这个文件浏览器仍命中旧缓存，白测一轮）
+            WEB_DIR / "static" / "pay-modal.js",
         ]
         mtimes = [f.stat().st_mtime for f in files if f.exists()]
         return str(int(max(mtimes))) if mtimes else "1"
@@ -1094,7 +1108,7 @@ async def alpha_detail(alpha_id: str) -> dict:
 
 
 @app.get("/api/simulator/alpha/{alpha_id}")
-async def simulator_alpha(alpha_id: str) -> dict:
+def simulator_alpha(alpha_id: str) -> dict:
     """Simulator 专用：返回 alpha 详情、settings、本地 PnL、逐年统计与真实分类。
 
     每次都会从平台拉一次 alpha 详情，以获取 classifications、checks 等元信息
@@ -1193,7 +1207,7 @@ async def simulator_alpha(alpha_id: str) -> dict:
 
 
 @app.post("/api/simulator/alpha/{alpha_id}/pnl")
-async def simulator_fetch_pnl(alpha_id: str) -> dict:
+def simulator_fetch_pnl(alpha_id: str) -> dict:
     """从平台拉取单条 alpha 的日度 PnL，缓存到本地并返回。"""
     st = _storage()
     try:
@@ -1232,57 +1246,6 @@ async def simulator_fetch_pnl(alpha_id: str) -> dict:
     }
 
 
-@app.get("/api/simulator/stats")
-async def simulator_stats() -> dict:
-    """Simulator 顶部真实统计：本地库中可计算的数字。"""
-    st = _storage()
-    total = st.count_alphas()
-    golden = st.count_golden_alphas()
-
-    # 本地回测数：simulations 表
-    sim_total = 0
-    sim_done = 0
-    try:
-        row = st._conn.execute(
-            "SELECT COUNT(*) AS n FROM simulations"
-        ).fetchone()
-        sim_total = int(row["n"]) if row else 0
-        row2 = st._conn.execute(
-            "SELECT COUNT(*) AS n FROM simulations WHERE status='completed'"
-        ).fetchone()
-        sim_done = int(row2["n"]) if row2 else 0
-    except Exception:
-        pass
-
-    # 已提交数
-    submitted = 0
-    try:
-        row = st._conn.execute("SELECT COUNT(*) AS n FROM submissions WHERE ok=1").fetchone()
-        submitted = int(row["n"]) if row else 0
-    except Exception:
-        pass
-
-    # 最近同步时间
-    last_pnl_sync = None
-    try:
-        row = st._conn.execute(
-            "SELECT MAX(pnl_fetched_at) AS ts FROM alphas"
-        ).fetchone()
-        last_pnl_sync = row["ts"]
-    except Exception:
-        pass
-
-    return {
-        "ok": True,
-        "total_alphas": total,
-        "golden_alphas": golden,
-        "simulations_total": sim_total,
-        "simulations_done": sim_done,
-        "submitted_alphas": submitted,
-        "last_pnl_sync": last_pnl_sync,
-    }
-
-
 def _brain_count_alphas_since(client, est_start_iso: str, *, submitted_only: bool = False) -> int | None:
     """BRAIN 真实「今日」计数：按 dateCreated / dateSubmitted 过滤 alpha 列表取 count。
 
@@ -1309,37 +1272,57 @@ def _brain_count_alphas_since(client, est_start_iso: str, *, submitted_only: boo
 
 _BASE_PAYMENT_CACHE: dict = {"data": None, "ts": 0.0}
 _BASE_PAYMENT_TTL = 300  # 秒；base payment 每日更新，缓存久一点避免频打接口
+# 260928：路由从 async def 改成同步 def 后由线程池并发执行，缓存的 check-then-set
+# 会出现「多个线程同时发现过期、同时去打接口」。加锁 + double-check，只放一个线程去取数。
+_BASE_PAYMENT_LOCK = threading.Lock()
 
 
 def _get_base_payment() -> dict | None:
     """拉取 BRAIN base-payment 活动（/users/self/activities/base-payment）。
 
     返回完整 dict：total/current/previous/ytd/yesterday 汇总 + records.records
-    （[[date, value], ...] 每日记录）。失败回退旧缓存 / None。
+    （[[date, regular, super], ...] 每日记录）。失败回退旧缓存 / None。
+
+    ⚠️ 必须显式带 `Accept: application/json;version=3.0`（260928 实测定案）：
+    该接口做 Accept 内容协商，同一个 URL 返回两套结构 ——
+      - `*/*`（httpx 默认）/ `application/json` / `version=2.0`：
+        total.value 只等于 Regular（普通 alpha 的 base payment），
+        records 是 [date, value] 两元组，**不含 SuperAlpha 支付**；
+      - `application/json;version=3.0`（官网页面前端用的口径）：
+        total.value = Regular + Super（与官网 /profile/performance 的
+        「Total Payment (All Time)」一致），并额外给出
+        regularAlpha / superAlpha 拆分，records 是 [date, regular, super] 三元组。
+    实测 260928：旧口径 116.19，v3 口径 121.75（regularAlpha 116.19 + superAlpha 5.56）。
     """
     import time as _t
     cached = _BASE_PAYMENT_CACHE
     if cached.get("data") and (_t.time() - cached.get("ts", 0)) < _BASE_PAYMENT_TTL:
         return cached["data"]
-    try:
-        client = _client()
-        resp = client._request_with_retry(
-            "GET", "/users/self/activities/base-payment",
-            op_name="sim_base_payment",
-        )
-        if resp.status_code < 400:
-            data = resp.json()
-            cached["data"] = data
-            cached["ts"] = _t.time()
-            return data
-    except Exception:
-        pass
-    return cached.get("data")
+    with _BASE_PAYMENT_LOCK:
+        # double-check：等锁期间可能已被别的线程刷新过
+        if cached.get("data") and (_t.time() - cached.get("ts", 0)) < _BASE_PAYMENT_TTL:
+            return cached["data"]
+        try:
+            client = _client()
+            resp = client._request_with_retry(
+                "GET", "/users/self/activities/base-payment",
+                headers={"Accept": "application/json;version=3.0"},
+                op_name="sim_base_payment",
+            )
+            if resp.status_code < 400:
+                data = resp.json()
+                cached["data"] = data
+                cached["ts"] = _t.time()
+                return data
+        except Exception:
+            pass
+        return cached.get("data")
 
 
 # 每日提交 alpha 数（/users/self/activities/submissions）
 _DAILY_SUB_CACHE: dict = {"data": None, "ts": 0.0}
 _DAILY_SUB_TTL = 300  # 秒
+_DAILY_SUB_LOCK = threading.Lock()  # 同 _BASE_PAYMENT_LOCK：防并发重复打接口
 
 
 def _get_daily_submissions() -> dict | None:
@@ -1352,25 +1335,35 @@ def _get_daily_submissions() -> dict | None:
     cached = _DAILY_SUB_CACHE
     if cached.get("data") and (_t.time() - cached.get("ts", 0)) < _DAILY_SUB_TTL:
         return cached["data"]
-    try:
-        client = _client()
-        resp = client._request_with_retry(
-            "GET", "/users/self/activities/submissions",
-            op_name="sim_daily_sub",
-        )
-        if resp.status_code < 400:
-            data = resp.json()
-            cached["data"] = data
-            cached["ts"] = _t.time()
-            return data
-    except Exception:
-        pass
-    return cached.get("data")
+    with _DAILY_SUB_LOCK:
+        # double-check：等锁期间可能已被别的线程刷新过
+        if cached.get("data") and (_t.time() - cached.get("ts", 0)) < _DAILY_SUB_TTL:
+            return cached["data"]
+        try:
+            client = _client()
+            resp = client._request_with_retry(
+                "GET", "/users/self/activities/submissions",
+                op_name="sim_daily_sub",
+            )
+            if resp.status_code < 400:
+                data = resp.json()
+                cached["data"] = data
+                cached["ts"] = _t.time()
+                return data
+        except Exception:
+            pass
+        return cached.get("data")
 
 
 @app.get("/api/simulator/platform-stats")
-async def simulator_platform_stats() -> dict:
+def simulator_platform_stats() -> dict:
     """Simulator 顶部平台指标：用户要的 4 项全部来自 BRAIN 实时。
+
+    ⚠️ 故意写成同步 def，不要改成 async def：本函数内部会串行打多个 BRAIN 接口
+    （consultant / competitions / consultant-summary / base-payment / 今日 alpha 计数），
+    而 client 是同步 httpx + time.sleep，撞并发上限时单次 sleep ≥30s、最多重试 12 次。
+    FastAPI 会把同步 def 路由自动丢进线程池执行，async def 则占用事件循环，
+    后者会**冻结整个服务**（实测首次加载本接口慢到 6 秒都拿不到数据）。
 
     - Osmosis Rank / VF（Value Factor）：来自 BRAIN /users/self/consultant
     - Today Simulated / Today Submitted：来自 BRAIN alpha 列表按美东日期过滤的 count
@@ -1394,28 +1387,41 @@ async def simulator_platform_stats() -> dict:
             hour=0, minute=0, second=0, microsecond=0,
         )
         est_start_iso = est_start.isoformat()
+        # ⚠️ 本地库 simulations.created_at 存的是 UTC ISO（形如 2026-09-28T01:34:24+00:00），
+        # 而 est_start_iso 带 -04:00 偏移，直接拿去比会错（偏移后缀参与字符串比较，
+        # 例如 UTC 的 09-27T03:00 会被误判为 >= 美东的 09-27T00:00-04:00）。
+        # 所以本地兜底必须先把美东零点换算回 UTC，才能和 created_at 同基准比较。
+        est_start_utc_iso = est_start.astimezone(timezone.utc).isoformat()
     except Exception:
         est_start_iso = today_start
+        est_start_utc_iso = today_start
 
     st = _storage()
 
     # ---- 本地今日计数（BRAIN 拉取失败时的兜底）----
+    # 口径与 BRAIN 对齐：用美东日界（换算成 UTC 后）而不是 UTC 日界，
+    # 否则切兜底时「今日」基准会偷偷差 12~13 小时，数字会跳。
     local_simulated = 0
     local_submitted = 0
     try:
         row = st._conn.execute(
             "SELECT COUNT(*) AS n FROM simulations WHERE created_at >= ?",
-            (today_start,),
+            (est_start_utc_iso,),
         ).fetchone()
         local_simulated = int(row["n"]) if row else 0
     except Exception:
         pass
     try:
-        local_submitted = st.count_simulations_since(today_start)
+        local_submitted = st.count_simulations_since(est_start_utc_iso)
     except Exception:
         local_submitted = 0
 
     # ---- BRAIN 实时（带短缓存，避免 30s 轮询频繁打接口）----
+    # ⚠️ 已知的轻微竞态（260928 记录，暂不修）：本缓存是 check-then-set，无锁。
+    # 路由改成同步 def 后由线程池并发执行，缓存刚好过期时可能有 2~3 个线程同时
+    # 发现过期并各自打一遍 BRAIN 读接口。后果仅为多几次读请求（不消耗回测配额），
+    # 不会写坏数据；且 TTL 120s、前端 30s 轮询，撞上的窗口很小。
+    # 若将来并发明显升高，再按 _BASE_PAYMENT_LOCK 的模式加锁 + double-check。
     cached = _platform_stats_cache
     brain = None
     if cached.get("data") and (_t.time() - cached.get("ts", 0)) < _PLATFORM_STATS_TTL:
@@ -1538,11 +1544,12 @@ async def simulator_platform_stats() -> dict:
 
 
 @app.get("/api/simulator/base-payment")
-async def simulator_base_payment() -> dict:
+def simulator_base_payment() -> dict:
     """Base Payment 每日明细 + 汇总（点顶部 Total Payment 卡片打开弹窗）。
 
-    Total Payment = total.value（全部累计）；
-    records.records = [[date, value], ...] 每日记录（折线图用）。
+    Total Payment = total.value（全部累计，= Regular + Super，与官网一致）；
+    total 对象另含 regularAlpha / superAlpha 拆分（v3 口径）；
+    records.records = [[date, regular, super], ...] 每日记录（折线图用，双线）。
     """
     try:
         bp = _get_base_payment()
@@ -1689,7 +1696,7 @@ def _fetch_submitted_alphas(client) -> dict:
 
 
 @app.get("/api/simulator/submitted-alphas")
-async def simulator_submitted_alphas(refresh: bool = False) -> dict:
+def simulator_submitted_alphas(refresh: bool = False) -> dict:
     """已提交 alpha 明细清单（供 Signals 卡片弹窗使用）。
 
     带 120s 短缓存：弹窗反复开关不会猛打 BRAIN。
@@ -2045,7 +2052,7 @@ async def pnl_sync_status() -> dict:
 
 
 @app.post("/api/sync/pnl/stop")
-async def pnl_sync_stop() -> dict:
+def pnl_sync_stop() -> dict:
     return pnl_sync_state.stop()
 
 
@@ -2220,7 +2227,7 @@ async def osmosis_config() -> dict:
 
 
 @app.get("/api/osmosis/rules")
-async def osmosis_rules() -> dict:
+def osmosis_rules() -> dict:
     return {"ok": True, "rules": OSMOSIS_RULES}
 
 
@@ -2308,7 +2315,7 @@ async def _start_osmosis_snapshot_loop() -> None:
 
 
 @app.get("/api/osmosis/tracks")
-async def osmosis_tracks() -> dict:
+def osmosis_tracks() -> dict:
     """枚举账号下实际有已提交 alpha 的（region/delay）赛道。
 
     下拉框不再硬编码 region 列表：硬编码漏过 GLB、HKG。
@@ -2594,7 +2601,7 @@ arc_state = ArcState()
 
 
 @app.get("/api/arc/inventory")
-async def arc_inventory(stage: str = "OS", max_scan: int = 3000) -> dict:
+def arc_inventory(stage: str = "OS", max_scan: int = 3000) -> dict:
     """列出可重跑的已提交 alpha（stage=OS 且 type=REGULAR）。只读，不投递。"""
     try:
         client = _client()
@@ -3110,7 +3117,7 @@ async def memo_add(req: Request) -> dict:
 
 
 @app.post("/api/memo/sync")
-async def memo_sync() -> dict:
+def memo_sync() -> dict:
     """同步备忘录全部 alpha 的提交状态与指标。"""
     st = _storage()
     _ensure_memo_table(st)
