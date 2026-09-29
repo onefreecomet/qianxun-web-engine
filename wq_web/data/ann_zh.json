@@ -1,0 +1,170 @@
+{
+  "_meta": {
+    "generated_at": "2026-09-29",
+    "maintainer": "阿法",
+    "note": "主题公告中文翻译表，按公告 id 索引。原文来自 BRAIN /users/self/messages。新增公告若无译文，前端自动回退显示英文原文并标注「未翻译」。术语约定：Power Pool / delay / universe / turnover / alpha / Osmosis 等 BRAIN 社区惯用词保留英文，主题专名保留原文以便在平台内对照检索。",
+    "fields": {
+      "title_zh": "中文标题",
+      "desc_zh": "中文正文，纯文本，\\n 换行，\\n- 为列表项",
+      "note_zh": "榜单/明细类公告的补充说明（可选）"
+    }
+  },
+
+  "7eQ04P7": {
+    "title_zh": "📢 新主题上线：All regions/D1 Power Pool Oct'26",
+    "desc_zh": "🎉 好消息！我们上线了新主题「All regions/D1 Power Pool Oct'26」。\n\n时长：2026 年 9 月 28 日 - 10 月 26 日（4 周）\n倍数：1X（普通 Power Pool alpha）\n条件：Power Pool alpha 必须是 delay 1、单一数据集，且使用 price-volume 或 fundamental 数据类别。不支持 support field（pv1 组字段）。\n\n符合该主题的 alpha 可参加 Power Pool 主题竞赛，津贴池总额最高 15,000 美元：\n- 第 1 名：600 美元\n- 第 2 名：500 美元\n- 第 3 名：400 美元\n- 第 4-8 名：各 300 美元\n- 第 9-10 名：各 250 美元\n- 第 11-15 名：各 200 美元\n- 第 16-20 名：各 150 美元\n- 第 21-30 名：各 125 美元\n- 第 31-40 名：各 100 美元\n\n了解 Power Pool 主题竞赛详情：见 FAQ"
+  },
+
+  "yjZbVZy": {
+    "title_zh": "📢 更新：顾问的 Power Pool 提交配额已调整",
+    "desc_zh": "我们很高兴宣布 Power Pool 提交配额的一次重要升级：在你提交 Power Pool alpha 的最初六周内采用阶梯式配额，让你起步阶段拥有更高的每日上限。\n\n从你第一次提交 Power Pool alpha 起算：\n- 第 1-2 周：每天 4 条（纯 Power Pool alpha），无月度配额\n- 第 3-4 周：每天 2 条，无月度配额\n- 第 5-6 周：每天 1 条，无月度配额\n- 6 周之后：每天 1 条（必须匹配一个活跃的 Power Pool 主题），每个 scope 每自然月 10 条纯 Power Pool alpha\n\n不匹配任何活跃主题的纯 Power Pool alpha，只能在最初 6 周内提交；6 周之后，纯 Power Pool 提交必须至少匹配一个活跃主题。标记为 [Power Pool + ATOM] 或 [Power Pool + Regular] 的 alpha 不受这些限制。\n\n已经在提交 Power Pool alpha？若你首次提交 Power Pool alpha 已超过 90 天，标准配额继续适用（每天 1 条纯 Power Pool alpha、每个 scope 每自然月 10 条、需匹配主题）；若首次提交在最近 90 天内，你将获得阶梯配额表的剩余部分。\n\n配额变化前一天你会收到通知。\n\n了解详情：\n- 首次 Power Pool alpha 之后的提交配额\n- Power Pool 主题竞赛 FAQ\n- 当月 Power Pool 主题日历"
+  },
+
+  "7zpoLMR": {
+    "title_zh": "📢 提醒：GLB/D1 Liquid Power Pool Aug'26 主题将于 9 月 27 日结束",
+    "desc_zh": "提醒一下：GLB/D1 Liquid Power Pool Aug'26 主题将于 9 月 27 日结束，只剩几天可以提交！\n\nGLB 区域、TOPDIV3000 股票池的 alpha 符合条件。\n\n顾问可从总额最高 15,000 美元的津贴池中获利：\n- 第 1 名：600 美元\n- 第 2 名：500 美元\n- 第 3 名：400 美元\n- 第 4-8 名：各 300 美元\n- 第 9-10 名：各 250 美元\n- 第 11-15 名：各 200 美元\n- 第 16-20 名：各 150 美元\n- 第 21-30 名：各 125 美元\n- 第 31-40 名：各 100 美元\n\n如何提交 Power Pool alpha？详见：Power Pool Alphas、Power Pool 主题竞赛、GLB TOPDIV3000 股票池"
+  },
+
+  "7eQKrP7": {
+    "title_zh": "📢 新主题上线：GLB/D1 Cluster Alphas Theme",
+    "desc_zh": "🎉 好消息！我们上线了新主题「GLB/D1 Cluster Alphas Theme」。\n\n时长：2026 年 9 月 14 日 - 10 月 11 日（4 周）\n倍数：2.5X（普通 alpha）\n条件：alpha 必须在 GLB 区域、使用 Delay 1 模拟，并通过 Cluster 检验。\n\n详见此处"
+  },
+
+  "RKP1LWy": {
+    "title_zh": "Global Alpha Competition 2026 最终榜单",
+    "desc_zh": "Global Alpha Competition 2026 最终榜单已发布！恭喜所有上榜选手。"
+  },
+
+  "RbX8jV7": {
+    "title_zh": "Systematic Predictions Challenge 2026 年 8 月榜单",
+    "desc_zh": "SPC 2026 年 8 月榜单已发布！恭喜所有上榜选手。可在右上角 Board Name 下拉框的「Systematic Predictions Challenge」标签页查看你的得分。\n\n全球获奖者 🔥\n（完整 50 人名单见下方英文原文，含 ID、学校与国别）",
+    "note_zh": "榜单明细保留原文：获奖者为参赛者 ID + 学校 + 国别，翻译后反而无法与平台内检索对照。"
+  },
+
+  "AaQQd2A": {
+    "title_zh": "📢 新主题上线：OTHER/D1 Power Pool Sept'26",
+    "desc_zh": "🎉 好消息！我们上线了新主题「OTHER/D1 Power Pool Sept'26」。\n\n时长：2026 年 8 月 31 日 - 9 月 27 日（4 周）\n倍数：1X（普通 Power Pool alpha）\n条件：Power Pool alpha 必须在以下区域之一用 Delay 1 模拟：KOR、JPN、CHN、AMR、TWN 或 HKG。\n\n符合该主题的 alpha 可参加 Power Pool 主题竞赛，津贴池总额最高 15,000 美元：\n- 第 1 名：600 美元\n- 第 2 名：500 美元\n- 第 3 名：400 美元\n- 第 4-8 名：各 300 美元\n- 第 9-15 名：各 250 美元\n- 第 16-20 名：各 220 美元\n- 第 21-30 名：各 190 美元\n- 第 31-40 名：各 175 美元\n- 第 41-50 名：各 160 美元\n- 第 51-60 名：各 145 美元\n- 第 61-70 名：各 130 美元\n- 第 71-80 名：各 115 美元\n\n了解 Power Pool 主题竞赛详情：见 FAQ"
+  },
+
+  "RBeK2aA": {
+    "title_zh": "GLB/D1 Power Pool Aug'26 榜单",
+    "desc_zh": "GLB/D1 Power Pool Aug'26 榜单已发布！恭喜所有上榜选手。可在右上角 Board Name 下拉框的「Power Pool Leaderboard」标签页查看得分。\n\n全球获奖者 🔥\n（完整 40 人名单见下方英文原文）\n\n提醒：每月所有 Power Pool 主题合计最高 15,000 美元的津贴池由 80 名获奖者分配。单个月份内每个主题的津贴池会因其时长和获奖人数而不同。2026 年 8 月有两个主题（GLB/D1 Power Pool Aug'26 与 GLB/D1 Liquid Power Pool Aug'26），每个主题的津贴结构为：\n- 第 1 名：600 美元\n- 第 2 名：500 美元\n- 第 3 名：400 美元\n- 第 4-8 名：各 300 美元\n- 第 9-10 名：各 250 美元\n- 第 11-15 名：各 200 美元\n- 第 16-20 名：各 150 美元\n- 第 21-30 名：各 125 美元\n- 第 31-40 名：各 100 美元"
+  },
+
+  "RxOz1GA": {
+    "title_zh": "📢 GLB/D1 Power Pool 更新",
+    "desc_zh": "进行中的 Power Pool 已简化为单一的 GLB Liquid 主题，持续到 9 月 27 日。GLB 区域、TOPDIV3000 股票池的 alpha 符合条件。高换手收益率检验（High turnover returns ratio test）的约束不再适用。\n\n顾问可从总额最高 15,000 美元的津贴池中获利：\n- 第 1 名：600 美元\n- 第 2 名：500 美元\n- 第 3 名：400 美元\n- 第 4-8 名：各 300 美元\n- 第 9-10 名：各 250 美元\n- 第 11-15 名：各 200 美元\n- 第 16-20 名：各 150 美元\n- 第 21-30 名：各 125 美元\n- 第 31-40 名：各 100 美元\n\n你在进行中的 Power Pool 里此前提交的高换手 alpha，将自动转入这个简化后的 Power Pool 主题。"
+  },
+
+  "R9J84By": {
+    "title_zh": "Systematic Predictions Challenge 2026 年 7 月榜单",
+    "desc_zh": "SPC 2026 年 7 月榜单已发布！恭喜所有上榜选手。可在右上角 Board Name 下拉框的「Systematic Predictions Challenge」标签页查看你的得分。\n\n全球获奖者 🔥\n（完整 50 人名单见下方英文原文）",
+    "note_zh": "榜单明细保留原文。"
+  },
+
+  "AJ98kL7": {
+    "title_zh": "📢 新主题上线：GLB/D1 Power Pool Aug'26 2",
+    "desc_zh": "🎉 好消息！我们上线了新主题「GLB/D1 Power Pool Aug'26 2」。\n\n时长：2026 年 8 月 10 日 - 8 月 23 日（2 周）\n倍数：1X（普通 Power Pool alpha）\n条件：Power Pool alpha 必须在 GLB 区域、delay 1、universe TOPDIV3000，并通过「High Turnover: High Turnover returns ratio test」。不允许使用 model110 数据集。"
+  },
+
+  "7lwq3ry": {
+    "title_zh": "Power Pool 主题竞赛 2026 年 7 月榜单",
+    "desc_zh": "Power Pool 主题竞赛 2026 年 7 月榜单已发布！恭喜所有上榜选手。可在右上角 Board Name 下拉框的「Power Pool Leaderboard」标签页查看得分。\n\n提醒：每月所有 Power Pool 主题合计最高 15,000 美元的津贴池由 80 名获奖者分配。单个月份内每个主题的津贴池会因其时长和获奖人数而不同。2026 年 7 月有两个主题（USA/D1 Power Pool July'26 与 USA/D1 Power Pool July'26 2），每个主题的津贴结构为：\n- 第 1 名：600 美元\n- 第 2 名：500 美元\n- 第 3 名：400 美元\n- 第 4-8 名：各 300 美元\n- 第 9-10 名：各 250 美元\n- 第 11-15 名：各 200 美元\n- 第 16-20 名：各 150 美元\n- 第 21-30 名：各 125 美元\n- 第 31-40 名：各 100 美元"
+  },
+
+  "R2qLlOA": {
+    "title_zh": "Systematic Predictions Challenge 2026 年 8 月赛季今日开启！",
+    "desc_zh": "SPC 2026 年 8 月赛季的提交现已开放。榜单今日重置；你此前月份的 prompt 提交会继续保留，除非你在提交页修改了分配。"
+  },
+
+  "A0QZB9R": {
+    "title_zh": "📢 新主题上线：GLB/D1 Power Pool Aug'26",
+    "desc_zh": "🎉 好消息！我们上线了新主题「GLB/D1 Power Pool Aug'26」。\n\n时长：2026 年 7 月 27 日 - 8 月 9 日（2 周）\n倍数：1X（普通 Power Pool alpha）\n条件：Power Pool alpha 必须在 GLB 区域、delay 1、universe TOPDIV3000，并使用以下中性化之一：Slow Factors、Fast Factors、Slow + Fast Factors、Crowding Factors、RAM。\n不允许使用 PV1 与 MODEL110 数据集（support field 除外）。\n\n符合该主题的 alpha 可参加 Power Pool 主题竞赛，津贴池总额最高 15,000 美元：\n- 第 1 名：600 美元\n- 第 2 名：500 美元\n- 第 3 名：400 美元\n- 第 4-8 名：各 300 美元\n- 第 9-10 名：各 250 美元\n- 第 11-15 名：各 200 美元\n- 第 16-20 名：各 150 美元\n- 第 21-30 名：各 125 美元\n- 第 31-40 名：各 100 美元\n\n了解详情：Power Pool 主题竞赛 FAQ、Risk Neutralized Alphas、Risk Neutralization 默认设置、Crowding 风险中性化 alpha、RAM 风险中性化 alpha、Statistical 风险中性化 alpha"
+  },
+
+  "Aagmaly": {
+    "title_zh": "Path to Genius [3/3]：顾问工具包与 IQC 顾问专属竞赛",
+    "desc_zh": "网络研讨会报名现已开放。\n\n时间：2026 年 7 月 24 日 上午 8 点（EST）\n地点：Zoom 报名链接\n\n议程：\n- Global Alpha Competition（GAC）—— 竞赛结构概览，以及顾问入门需要了解的事项\n- GAC Alpha 示例 —— 示例 alpha 思路与案例，帮助顾问理解什么样的提交算强\n- SuperAlpha —— SuperAlpha 介绍，以及它如何融入 BRAIN 的 alpha 研究路径\n\n参加该研讨会可计入 Genius 社区积分。"
+  },
+
+  "RKL3wwy": {
+    "title_zh": "Path to Genius [1/3]：顾问工具包与 IQC 顾问专属竞赛",
+    "desc_zh": "网络研讨会报名现已开放。\n\n时间：2026 年 7 月 17 日 上午 8 点（EST）\n地点：Zoom 报名链接\n\n议程：\n- 即将开始的 IQC 顾问专属竞赛\n- 顾问工具包介绍\n- 最大化津贴的途径（Osmosis、SPC、Power Pool 等）\n\n参加该研讨会可计入 Genius 社区积分。"
+  },
+
+  "yVMjOlR": {
+    "title_zh": "📢 新主题上线：USA/D1 Power Pool July'26 2",
+    "desc_zh": "🎉 好消息！我们上线了新主题「USA/D1 Power Pool July'26 2」。\n\n时长：2026 年 7 月 12 日 - 7 月 26 日（2 周）\n倍数：1X（普通 Power Pool alpha）\n条件：Power Pool alpha 必须在 USA 区域、delay 1、universe TOP1000，并通过「High Turnover: High Turnover returns ratio test」。\n不允许使用 PV1 数据集（support field 除外）。\n\n符合该主题的 alpha 可参加 Power Pool 主题竞赛，津贴池总额最高 15,000 美元：\n- 第 1 名：600 美元\n- 第 2 名：500 美元\n- 第 3 名：400 美元\n- 第 4-8 名：各 300 美元\n- 第 9-10 名：各 250 美元\n- 第 11-15 名：各 200 美元\n- 第 16-20 名：各 150 美元\n- 第 21-30 名：各 125 美元\n- 第 31-40 名：各 100 美元\n\n了解详情：Power Pool 主题竞赛 FAQ、Getting Started with High Turnover Alphas"
+  },
+
+  "AZZwbQA": {
+    "title_zh": "Power Pool 主题竞赛 2026 年 6 月榜单",
+    "desc_zh": "Power Pool 主题竞赛 2026 年 6 月榜单已发布！恭喜所有上榜选手。可在右上角 Board Name 下拉框的「Power Pool Leaderboard」查看得分。\n\n提醒：每月所有 Power Pool 主题合计最高 15,000 美元的津贴池由 80 名获奖者分配。单个月份内每个主题的津贴池会因其时长和获奖人数而不同。2026 年 6 月有两个主题（USA/D1 Fast Datasets Power Pool June'26 与 GLB/D1 Dataset Power Pool June'26），每个主题的津贴结构为：\n- 第 1 名：600 美元\n- 第 2 名：500 美元\n- 第 3 名：400 美元\n- 第 4-8 名：各 300 美元\n- 第 9-10 名：各 250 美元\n- 第 11-15 名：各 200 美元\n- 第 16-20 名：各 150 美元\n- 第 21-30 名：各 125 美元\n- 第 31-40 名：各 100 美元"
+  },
+
+  "R36g1zA": {
+    "title_zh": "🔥 Systematic Predictions Challenge（SPC）今日上线！",
+    "desc_zh": "我们非常激动地宣布 SPC 今日正式上线。现在就可以在这里提交你的 prompt。在研究 prompt 之前，请先阅读 FAQ。"
+  },
+
+  "7zWl5qA": {
+    "title_zh": "📢 新主题上线：USA/D1 Power Pool July'26",
+    "desc_zh": "🎉 好消息！我们上线了新主题「USA/D1 Power Pool July'26」。\n\n时长：2026 年 6 月 29 日 - 7 月 12 日（2 周）\n倍数：1X（普通 Power Pool alpha）\n条件：Power Pool alpha 必须在 USA 区域、delay 1、universe TOP1000，并使用以下中性化之一：Slow Factors、Fast Factors、Slow + Fast Factors、Crowding Factors、RAM、Statistical。不允许使用 PV1 数据集（support field 除外）。\n\n符合该主题的 alpha 可参加 Power Pool 主题竞赛，津贴池总额最高 15,000 美元：\n- 第 1 名：600 美元\n- 第 2 名：500 美元\n- 第 3 名：400 美元\n- 第 4-8 名：各 300 美元\n- 第 9-10 名：各 250 美元\n- 第 11-15 名：各 200 美元\n- 第 16-20 名：各 150 美元\n- 第 21-30 名：各 125 美元\n- 第 31-40 名：各 100 美元\n\n了解详情：Power Pool 主题竞赛 FAQ、Risk Neutralized Alphas、Risk Neutralization 默认设置、Crowding 风险中性化 alpha、RAM 风险中性化 alpha、Statistical 风险中性化 alpha"
+  },
+
+  "RmprL8A": {
+    "title_zh": "📢 新主题上线：GLB/D1 Dataset Power Pool June'26",
+    "desc_zh": "🎉 好消息！我们上线了新主题「GLB/D1 Dataset Power Pool June'26」。\n\n时长：2026 年 6 月 15 日 - 6 月 28 日（2 周）\n倍数：1X（普通 Power Pool alpha）\n条件：Power Pool alpha 应在 GLB 区域并使用 delay 1。可在 Data 页面勾选 Theme 复选框查看可用数据集清单。\n\n符合该主题的 alpha 可参加 Power Pool 主题竞赛，津贴池总额最高 15,000 美元：\n- 第 1 名：600 美元\n- 第 2 名：500 美元\n- 第 3 名：400 美元\n- 第 4-8 名：各 300 美元\n- 第 9-10 名：各 250 美元\n- 第 11-15 名：各 200 美元\n- 第 16-20 名：各 150 美元\n- 第 21-30 名：各 125 美元\n- 第 31-40 名：各 100 美元\n\n了解 Power Pool 主题竞赛详情：见 FAQ"
+  },
+
+  "y5VaBn7": {
+    "title_zh": "📢 新主题上线：GLB High Turnover Theme",
+    "desc_zh": "🎉 好消息！我们上线了新主题「GLB High Turnover Theme」。\n\n时长：6 月 15 日 - 8 月 9 日（8 周）\n倍数：2X（普通高换手 alpha）；若 alpha 匹配以下任一分类则 3X：Investable、Liquid 或 Orthogonal\n条件：alpha 必须在 GLB 区域模拟，并满足高换手（HTVR）基础条件：Turnover > 20 且 High Turnover returns ratio > 0.75\n\n入门请看：Getting Started with High Turnover Alphas"
+  },
+
+  "R2qd3qA": {
+    "title_zh": "Power Pool 主题竞赛 2026 年 5 月榜单",
+    "desc_zh": "Power Pool 主题竞赛 2026 年 5 月榜单已发布！恭喜所有上榜选手。可在右上角 Board Name 下拉框的「Power Pool Leaderboard」标签页查看得分。\n\n提醒：每月所有 Power Pool 主题合计最高 15,000 美元的津贴池由 80 名获奖者分配。单个月份内每个主题的津贴池会因其时长和获奖人数而不同。2026 年 5 月只有一个 Power Pool 主题，津贴结构为：\n- 第 1 名：600 美元\n- 第 2 名：500 美元\n- 第 3 名：400 美元\n- 第 4-8 名：各 300 美元\n- 第 9-15 名：各 250 美元\n- 第 16-20 名：各 220 美元\n- 第 21-30 名：各 190 美元\n- 第 31-40 名：各 175 美元\n- 第 41-50 名：各 160 美元\n- 第 51-60 名：各 145 美元\n- 第 61-70 名：各 130 美元\n- 第 71-80 名：各 115 美元"
+  },
+
+  "A0Q9xJR": {
+    "title_zh": "📢 GLB HighTurnover Datasets Theme 已延期至 6 月 14 日！",
+    "desc_zh": "🎉 好消息！我们将「GLB HighTurnover Datasets Theme」延期，该主题现在将于 6 月 14 日结束。\n\n倍数：2X（普通 alpha）\n条件：alpha 必须在 GLB 区域模拟，且 turnover > 20\n\n可在此查看可用数据集清单。"
+  },
+
+  "Rx8z4wR": {
+    "title_zh": "📢 新主题上线：USA/D1 Fast Datasets Power Pool June'26",
+    "desc_zh": "🎉 好消息！我们上线了新主题「USA/D1 Fast Datasets Power Pool June'26」。\n\n时长：2026 年 6 月 1 日 - 6 月 14 日（2 周）\n倍数：1X（普通 Power Pool alpha）\n条件：Power Pool alpha 应在 USA 区域并使用 delay 1。可在 Data 页面勾选 Theme 复选框查看可用数据集清单。\n\n符合该主题的 alpha 可参加 Power Pool 主题竞赛，津贴池总额最高 15,000 美元：\n- 第 1 名：600 美元\n- 第 2 名：500 美元\n- 第 3 名：400 美元\n- 第 4-8 名：各 300 美元\n- 第 9-10 名：各 250 美元\n- 第 11-15 名：各 200 美元\n- 第 16-20 名：各 150 美元\n- 第 21-30 名：各 125 美元\n- 第 31-40 名：各 100 美元\n\n了解 Power Pool 主题竞赛详情：见 FAQ"
+  },
+
+  "A1Dl127": {
+    "title_zh": "Data Creation Challenge 结果公布",
+    "desc_zh": "Data Creation Challenge 最终结果已公布 —— 恭喜全球获奖者，前三名为：\n- 🥇 第 1 名：AR98193（印度）\n- 🥈 第 2 名：VC17729（中国大陆）\n- 🥉 第 3 名：WL27618（中国大陆）\n\n获奖者按 Merged Performance Score 与 Assessment Score 评分（竞赛资格标准涵盖模拟、数据字段、notebook、演示等）。\n\n竞赛津贴预计在结果公布后三十（30）天起的下一个发票周期内支付。如有需要，将另行向获奖者提供更多细节。"
+  },
+
+  "yVYbvER": {
+    "title_zh": "📢 新主题上线：GLB HighTurnover Datasets Theme",
+    "desc_zh": "🎉 好消息！我们上线了新主题「GLB HighTurnover Datasets Theme」。\n\n时长：5 月 25 日 - 6 月 7 日（2 周）\n倍数：2X（普通 alpha）\n条件：alpha 必须在 GLB 区域模拟，且 turnover > 20%\n\n可在此查看可用数据集清单。"
+  },
+
+  "7MzGNqA": {
+    "title_zh": "Python Alphas Competition 2026 进阶学习系列开放报名",
+    "desc_zh": "Python Alphas Competition 2026 进阶学习系列现已开放报名。\n\n议程：\n- 6 月 4 日 上午 9 点（EST）—— 进阶工作流：用 BrainLabs 模拟做快速迭代、聚焦式数据清洗、研究 notebook 的结构化组织、运行网格搜索与分析\n- 6 月 11 日 上午 9 点（EST）—— 模拟优化：启发式优化（蚁群搜索）、Online Alphas（自适应多参数加权）\n- 6 月 17 日 上午 9 点（EST）—— 进阶算子开发：alpha 研究的进阶数学模型、用于信号构建的机器学习方法、提升信号的独特性与多样性\n- 7 月 1 日 上午 9 点（EST）—— 深度学习 alpha 构建：BRAIN Lab 中的数据预处理、神经网络 alpha 的特征构建、在框架内搭建神经网络模型、强化学习 alpha 构建\n\n地点：Zoom 报名链接",
+    "note_zh": "原文日期写作 “4h June” 与 “1th June”，疑为 4th / 11th 之笔误，中文按上下文译为 6 月 4 日与 6 月 11 日。"
+  },
+
+  "A0va25y": {
+    "title_zh": "📢 新主题上线：高换手（HTVR）主题 Investable HTVR Theme",
+    "desc_zh": "🎉 好消息！我们上线了新主题「Investable HTVR Theme」。\n\n时长：5 月 11 日 - 5 月 24 日（2 周）\n倍数：3X（普通 alpha）\n条件：alpha 必须在 USA 区域模拟，并满足高换手（HTVR）基础条件：\n- Turnover > 20%\n- High Turnover returns ratio > 0.75，或（Pnl realization 2.0 且 Max Trade turnover > 20%），或（Max Position Sharpe > 2.0 且 Max Position turnover > 20%）\n\n入门请看：Getting Started with High Turnover Alphas"
+  },
+
+  "yrloQMA": {
+    "title_zh": "Power Pool 主题竞赛 2026 年 4 月榜单",
+    "desc_zh": "Power Pool 主题竞赛 2026 年 4 月榜单已发布！恭喜所有上榜选手。可在右上角 Board Name 下拉框的「Power Pool Leaderboard」标签页查看得分。\n\n提醒：每月所有 Power Pool 主题合计最高 15,000 美元的津贴池由 80 名获奖者分配。单个月份内每个主题的津贴池会因其时长和获奖人数而不同。2026 年 4 月有多个 Power Pool 主题，每个主题的津贴结构为：\n- 第 1 名：600 美元\n- 第 2 名：500 美元\n- 第 3 名：400 美元\n- 第 4-8 名：各 300 美元\n- 第 9-10 名：各 250 美元\n- 第 11-15 名：各 200 美元\n- 第 16-20 名：各 150 美元\n- 第 21-30 名：各 125 美元\n- 第 31-40 名：各 100 美元"
+  },
+
+  "7l2mbaR": {
+    "title_zh": "📢 新主题上线：MEA Region Theme",
+    "desc_zh": "🎉 好消息！我们上线了新主题「MEA Region Theme」。\n\n时长：2026 年 5 月 4 日 - 5 月 31 日（4 周）\n倍数：1.5X（普通 alpha）\n条件：alpha 必须在 MEA 区域模拟。"
+  }
+}

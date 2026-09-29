@@ -3274,6 +3274,154 @@ async def prompts_save(req: Request) -> dict:
     return {"ok": True, "prompts": prompts}
 
 
+# ---------------- 主题公告（BRAIN 官网右上角铃铛，/users/self/messages） ----------------
+
+_ANN_CACHE: dict = {"data": None, "ts": 0.0}
+_ANN_TTL = 300          # 秒；公告更新不频繁，5 分钟缓存足够，避免频繁打 BRAIN
+_ANN_LOCK = threading.Lock()   # 同 _BASE_PAYMENT_LOCK：防并发重复打接口
+_ANN_PAGE_SIZE = 100    # 单页条数。⚠️ BRAIN 的 limit 上限就是 100：传 200 只回 100 条
+                        # （260929 实测，next 链接会回落成 limit=100&offset=100）
+_ANN_MAX_ITEMS = 300    # 分页上限（当前账号 159 条消息，2 页拉完；设上限防止异常翻页死循环）
+
+# 「主题类」公告判定：标题命中任一关键词即算（大小写不敏感）。
+# 260929 实测 /users/self/messages：ANNOUNCEMENT 里就是这些（新主题发布、Power Pool
+# 配额与榜单、竞赛公告）；NOTIFICATION 是系统提醒（Osmosis 分配、Genius 里程碑、
+# 个性化建议），不属于「主题」，在 type 层已整体过滤掉。
+_ANN_THEME_KEYWORDS = ("theme", "power pool", "competition", "challenge")
+
+
+def _is_theme_announcement(title: str) -> bool:
+    t = (title or "").lower()
+    return any(k in t for k in _ANN_THEME_KEYWORDS)
+
+
+# ---------------- 主题公告中文翻译表（wq_web/data/ann_zh.json） ----------------
+# BRAIN 公告是英文的。翻译表按公告 id 索引，由人工（阿法）维护，不用 LLM（本机没配密钥）。
+# 按 mtime 判断是否重读 —— 补翻译后不用重启服务，刷新页面即生效。
+_ANN_ZH_PATH = WEB_DIR / "data" / "ann_zh.json"
+_ANN_ZH_CACHE: dict = {"data": None, "mtime": 0.0}
+_ANN_ZH_LOCK = threading.Lock()
+
+
+def _load_ann_zh() -> dict:
+    """加载公告中文翻译表。返回 {公告id: {title_zh, desc_zh, note_zh?}}。
+
+    读不到 / 解析失败时回退上次成功的结果（首次则空表），**不抛异常** ——
+    翻译表缺失只应导致「显示英文原文」，不该让整个公告接口挂掉。
+    """
+    try:
+        mtime = _ANN_ZH_PATH.stat().st_mtime
+    except OSError:
+        return _ANN_ZH_CACHE.get("data") or {}
+    with _ANN_ZH_LOCK:
+        if _ANN_ZH_CACHE.get("data") is not None and _ANN_ZH_CACHE.get("mtime") == mtime:
+            return _ANN_ZH_CACHE["data"]
+        try:
+            raw = json.loads(_ANN_ZH_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            return _ANN_ZH_CACHE.get("data") or {}
+        # 以 _ 开头的键是元信息（_meta），不是公告 id
+        data = {k: v for k, v in raw.items() if not k.startswith("_") and isinstance(v, dict)}
+        _ANN_ZH_CACHE["data"] = data
+        _ANN_ZH_CACHE["mtime"] = mtime
+        return data
+
+
+def _get_announcements() -> dict | None:
+    """拉取 BRAIN 公告（/users/self/messages，与官网右上角铃铛同源）。
+
+    只保留 type == "ANNOUNCEMENT"，分页拉取直到拿全或触顶 _ANN_MAX_ITEMS。
+    返回 {"items": [...], "total": n, "themeCount": n, "fetchedAt": iso}；
+    失败回退旧缓存，仍无则返回 None —— 调用方据此区分「拉取失败」与「确实没有公告」，
+    不能让前端把接口故障显示成「没有公告」。
+    """
+    import time as _t
+    cached = _ANN_CACHE
+    if cached.get("data") and (_t.time() - cached.get("ts", 0)) < _ANN_TTL:
+        return cached["data"]
+    with _ANN_LOCK:
+        # double-check：等锁期间可能已被别的线程刷新过
+        if cached.get("data") and (_t.time() - cached.get("ts", 0)) < _ANN_TTL:
+            return cached["data"]
+        items: list[dict] = []
+        try:
+            client = _client()
+            offset = 0
+            while offset < _ANN_MAX_ITEMS:
+                resp = client._request_with_retry(
+                    "GET",
+                    f"/users/self/messages?limit={_ANN_PAGE_SIZE}&offset={offset}",
+                    op_name=f"ann_messages[{offset}]",
+                )
+                if resp.status_code >= 400:
+                    break
+                payload = resp.json()
+                results = payload.get("results") or []
+                total = int(payload.get("count") or 0)
+                items.extend(results)
+                offset += _ANN_PAGE_SIZE
+                if not results or offset >= total:
+                    break
+        except Exception:
+            items = []
+        if not items:
+            return cached.get("data")
+        anns = [m for m in items if (m.get("type") or "").upper() == "ANNOUNCEMENT"]
+        data = {
+            "items": anns,
+            "total": len(anns),
+            "themeCount": sum(1 for m in anns if _is_theme_announcement(m.get("title"))),
+            "fetchedAt": datetime.now(timezone.utc).isoformat(),
+        }
+        cached["data"] = data
+        cached["ts"] = _t.time()
+        return data
+
+
+@app.get("/api/announcements")
+def announcements(refresh: bool = False) -> dict:
+    """主题公告列表（首页标题行「主题公告」按钮弹窗的数据源）。
+
+    ⚠️ 同步 def，不要改成 async def：内部经 _client()._request_with_retry 同步打 BRAIN，
+    见文件顶部「路由签名约定」。refresh=1 绕过 300s 缓存强制重拉。
+    """
+    if refresh:
+        _ANN_CACHE["ts"] = 0.0
+    data = _get_announcements()
+    if not data:
+        raise HTTPException(status_code=502, detail="BRAIN 公告读取失败（登录态或网络问题）")
+    # 翻译表在这里合并（不在 _get_announcements 的缓存里）—— 补翻译后 mtime 一变即生效，
+    # 不必等 300s 缓存过期。isTheme 同理只在服务端判定，前端不重算规则。
+    zh = _load_ann_zh()
+    items = []
+    translated = 0
+    for m in data["items"]:
+        item = {**m, "isTheme": _is_theme_announcement(m.get("title"))}
+        t = zh.get(m.get("id") or "") or {}
+        if t.get("title_zh") or t.get("desc_zh"):
+            item["titleZh"] = t.get("title_zh") or ""
+            item["descZh"] = t.get("desc_zh") or ""
+            item["noteZh"] = t.get("note_zh") or ""
+            item["translated"] = True
+            translated += 1
+        else:
+            item["titleZh"] = ""
+            item["descZh"] = ""
+            item["noteZh"] = ""
+            item["translated"] = False
+        items.append(item)
+    return {
+        "ok": True,
+        "items": items,
+        "total": len(items),
+        "theme_count": data["themeCount"],
+        # 已翻译条数：前端据此提示「还有 N 条暂无中文」，别让用户以为是翻译坏了
+        "translated_count": translated,
+        "untranslated_count": len(items) - translated,
+        "fetched_at": data["fetchedAt"],
+    }
+
+
 # ---------------- 统计仪表盘数据 ----------------
 
 

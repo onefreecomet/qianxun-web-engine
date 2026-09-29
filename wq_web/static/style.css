@@ -1715,3 +1715,206 @@ code { background: rgba(56,189,248,0.1); color: var(--accent); padding: 1px 6px;
   font-variant-numeric: tabular-nums;
 }
 
+/* ===== 主题公告：总览标题行按钮 + 弹窗（260929 新增） ===== */
+
+.ann-btn {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 15px;
+  border-radius: 10px;
+  border: 1px solid var(--border-2);
+  background: linear-gradient(180deg, rgba(34,211,238,0.10), rgba(34,211,238,0.03));
+  color: var(--text);
+  font: 600 13px var(--sans);
+  cursor: pointer;
+  transition: border-color .18s var(--ease), transform .18s var(--ease), background .18s var(--ease);
+}
+.ann-btn:hover {
+  border-color: var(--accent);
+  background: linear-gradient(180deg, rgba(34,211,238,0.18), rgba(34,211,238,0.06));
+}
+.ann-btn:active { transform: translateY(1px); }
+.ann-btn-ico {
+  width: 15px; height: 15px; flex: none;
+  fill: none; stroke: var(--accent); stroke-width: 1.9;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+.ann-btn-badge {
+  min-width: 19px; height: 19px; padding: 0 5px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 999px;
+  background: var(--accent); color: #05212a;
+  font: 700 11px var(--mono); font-variant-numeric: tabular-nums;
+}
+.ann-btn-badge[hidden] { display: none; }
+
+/* 列表：限高自带滚动，保证下方备注区始终可见（否则长列表要滚很久才找到备注框） */
+.ann-list {
+  max-height: 44vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 2px 2px 4px;
+  margin-bottom: 14px;
+}
+.ann-list::-webkit-scrollbar { width: 8px; }
+.ann-list::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 8px; }
+
+.ann-item {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-2);
+  padding: 12px 14px;
+  transition: border-color .18s var(--ease);
+}
+.ann-item:hover { border-color: var(--border-2); }
+
+.ann-item-head { display: flex; align-items: baseline; gap: 10px; }
+.ann-tag {
+  flex: none;
+  padding: 1px 7px;
+  border-radius: 6px;
+  font: 600 11px var(--sans);
+  letter-spacing: .3px;
+}
+.ann-tag-theme { background: var(--signal-soft); color: var(--accent); border: 1px solid rgba(34,211,238,0.35); }
+.ann-tag-other { background: rgba(140,159,185,0.12); color: var(--text-dim); border: 1px solid var(--border-2); }
+.ann-item-title { flex: 1; font: 600 14px var(--sans); color: var(--text); line-height: 1.5; }
+.ann-item-date {
+  flex: none;
+  display: flex; align-items: baseline; gap: 6px;
+  font: 500 11.5px var(--mono);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.ann-item-date i { font-style: normal; color: var(--text-mute); }
+
+/* 英文原标题：常驻一行小灰字，中文标题下方。过长截断，完整标题看 title 属性 */
+.ann-item-title-en {
+  margin-top: 4px;
+  font: 400 12px/1.5 var(--sans);
+  color: var(--text-mute);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ann-item-title-en.ann-untranslated { color: var(--warn); }
+
+/* 中文正文（主）/ 英文原文（折叠）：共用排版规则，靠左竖线区分主次 */
+.ann-item-body,
+.ann-item-en {
+  margin-top: 9px;
+  padding-top: 9px;
+  border-top: 1px dashed var(--border);
+  font-size: 13px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+.ann-item-body { color: var(--text-dim); }
+.ann-item:not(.expanded) .ann-item-body { display: none; }
+
+.ann-item-en {
+  margin-top: 8px;
+  padding: 8px 0 0 10px;
+  border-top: none;
+  border-left: 2px solid var(--border-2);
+  color: var(--text-mute);
+  font-size: 12.5px;
+}
+.ann-item:not(.en-open) .ann-item-en { display: none; }
+
+/* 中文译文是纯文本转的 div（见 annZhHtml），列表项用 ::before 出圆点 */
+.ann-zh-p { margin: 0 0 4px; }
+.ann-zh-p:last-child { margin-bottom: 0; }
+.ann-zh-li { margin: 2px 0; padding-left: 12px; position: relative; }
+.ann-zh-li::before { content: '·'; position: absolute; left: 2px; color: var(--accent); }
+.ann-zh-note {
+  margin-top: 7px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-mute);
+}
+
+.ann-item-body p, .ann-item-en p { margin: 0 0 6px; }
+.ann-item-body p:last-child, .ann-item-en p:last-child { margin-bottom: 0; }
+.ann-item-body ul, .ann-item-body ol,
+.ann-item-en ul, .ann-item-en ol { margin: 6px 0 6px 18px; }
+.ann-item-body li, .ann-item-en li { margin: 2px 0; }
+.ann-item-body b, .ann-item-body strong,
+.ann-item-en b, .ann-item-en strong { color: var(--text); }
+.ann-item-body a, .ann-item-en a {
+  color: var(--accent); text-decoration: underline; text-underline-offset: 2px;
+}
+.ann-item-body a:hover, .ann-item-en a:hover { color: #7ee7f7; }
+.ann-item-body code, .ann-item-en code {
+  font-family: var(--mono); font-size: 12px;
+  background: var(--bg-3); padding: 1px 5px; border-radius: 4px;
+}
+.ann-item-body table, .ann-item-en table { border-collapse: collapse; margin: 8px 0; font-size: 12px; }
+.ann-item-body td, .ann-item-body th,
+.ann-item-en td, .ann-item-en th {
+  border: 1px solid var(--border); padding: 5px 8px; text-align: left;
+}
+
+/* 操作行：展开正文 / 显示英文原文并排 */
+.ann-item-actions {
+  display: flex; align-items: center; gap: 14px;
+  margin-top: 8px;
+}
+.ann-toggle-body, .ann-toggle-en {
+  background: none; border: none; padding: 0;
+  color: var(--accent);
+  font: 600 12px var(--sans);
+  cursor: pointer;
+}
+.ann-toggle-body:hover, .ann-toggle-en:hover { text-decoration: underline; }
+.ann-toggle-en { color: var(--text-dim); }
+
+.ann-empty {
+  padding: 34px 10px;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+/* 备注区：localStorage 本地存储，不上传 */
+.ann-note-block {
+  border: 1px solid var(--border-2);
+  border-radius: 12px;
+  background: var(--bg-1);
+  padding: 12px 14px;
+  margin-bottom: 14px;
+}
+.ann-note-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 8px;
+}
+.ann-note-title { font: 600 13px var(--sans); color: var(--text); }
+.ann-note-status { font: 500 11.5px var(--mono); color: var(--text-mute); }
+.ann-note-status.saved { color: var(--good); }
+.ann-note-area {
+  width: 100%;
+  min-height: 96px;
+  max-height: 260px;
+  resize: vertical;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 10px 12px;
+  color: var(--text);
+  font: 400 13px/1.65 var(--sans);
+  outline: none;
+  transition: border-color .18s var(--ease);
+}
+.ann-note-area:focus { border-color: var(--accent); }
+.ann-note-area::placeholder { color: var(--text-mute); }
+
+@media (max-width: 900px) {
+  .ann-item-head { flex-wrap: wrap; }
+  .ann-item-title { flex: 1 1 100%; order: 3; }
+  .ann-list { max-height: 52vh; }
+}
+

@@ -2520,6 +2520,378 @@ function closeTodayModal() {
 // 支持 ?signals=1 直达：进页面就弹清单
 // 首页不做 ?signals=1 直达，已移除（原 simulator 行为）
 
+// ==================== 主题公告弹窗（点总览标题行「主题公告」按钮打开） ====================
+// 数据源：BRAIN /users/self/messages（官网右上角铃铛同源），服务端已滤成 ANNOUNCEMENT。
+// 默认只显示「主题类」，可切「全部公告」。备注区存 localStorage，不上传。
+const annModal = $('annModal');
+const ANN_NOTE_KEY = 'qx_ann_note_v1';
+const annState = {
+  items: [],
+  mode: 'theme',      // theme | all
+  keyword: '',
+  total: 0,
+  themeCount: 0,
+  translatedCount: 0,
+  untranslatedCount: 0,
+  themeUntranslated: 0,
+  fetchedAt: '',
+  loading: false,
+  loaded: false,
+  error: null,
+};
+
+/** 公告正文是 BRAIN 返回的 HTML。插入前必须清洗：
+ *  只留排版类标签，剥掉全部 on* 事件与 style，链接补全域名并强制新窗口打开。
+ *  直接 innerHTML 官方内容等于把 XSS 面交给上游，这一步不能省。 */
+const ANN_TAGS = new Set(['A', 'B', 'STRONG', 'I', 'EM', 'U', 'S', 'BR', 'P', 'UL', 'OL', 'LI',
+  'TABLE', 'THEAD', 'TBODY', 'TR', 'TD', 'TH', 'SPAN', 'DIV', 'CODE', 'SMALL',
+  'H1', 'H2', 'H3', 'H4', 'BLOCKQUOTE', 'HR']);
+const ANN_DROP = 'script,style,iframe,object,embed,link,meta,svg,math,template,noscript,form,input,button';
+
+function annCleanHtml(html) {
+  if (!html) return '';
+  const doc = new DOMParser().parseFromString('<div id="ann-root">' + html + '</div>', 'text/html');
+  const root = doc.getElementById('ann-root');
+  if (!root) return '';
+  // 第一遍：连内容一起删掉危险标签（白名单替换会把它们的内容变成可见文本）
+  root.querySelectorAll(ANN_DROP).forEach((el) => el.remove());
+  const walk = (node) => {
+    for (const child of Array.from(node.childNodes)) {
+      if (child.nodeType === 3) continue;                        // 文本原样保留
+      if (child.nodeType !== 1) { child.remove(); continue; }     // 注释等一律删
+      if (!ANN_TAGS.has(child.tagName)) {
+        // 不在白名单：换成 span 保住内容（span 在白名单内，递归下去继续处理）
+        const span = doc.createElement('span');
+        span.append(...Array.from(child.childNodes));
+        child.replaceWith(span);
+        walk(span);
+        continue;
+      }
+      for (const attr of Array.from(child.attributes)) {
+        const n = attr.name.toLowerCase();
+        const keep = n === 'colspan' || n === 'rowspan' || (n === 'href' && child.tagName === 'A');
+        if (!keep) child.removeAttribute(attr.name);
+      }
+      if (child.tagName === 'A') {
+        let href = (child.getAttribute('href') || '').trim();
+        if (href.startsWith('/')) href = 'https://platform.worldquantbrain.com' + href;
+        if (/^https?:\/\//i.test(href)) {
+          child.setAttribute('href', href);
+          child.setAttribute('target', '_blank');
+          child.setAttribute('rel', 'noopener noreferrer');
+        } else {
+          child.removeAttribute('href');
+        }
+      }
+      walk(child);
+    }
+  };
+  walk(root);
+  return root.innerHTML;
+}
+
+const annPlain = (html) => String(html || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+
+/** 相对时间：按「美东自然日」差算，与左边的日期列同一口径。
+ *  ⚠️ 不能用 (Date.now() - dateCreated) / 86400000：dateCreated 带美东偏移，
+ *  按绝对小时差会算出「2026-09-27 = 昨天」这种与日期列自相矛盾的结果
+ *  （美东 09-27 到 09-29 明明是 2 天前）。两边都用美东日界才自洽。 */
+function annAgo(iso) {
+  const day = sigDay(iso);
+  if (!day || day === '—') return '';
+  const today = todayEstDay();
+  const diff = Math.round((Date.parse(today + 'T00:00:00Z') - Date.parse(day + 'T00:00:00Z')) / 86400000);
+  if (diff <= 0) return '今天';
+  if (diff === 1) return '昨天';
+  if (diff < 30) return `${diff} 天前`;
+  const months = Math.floor(diff / 30);
+  return months < 12 ? `${months} 个月前` : `${Math.floor(months / 12)} 年前`;
+}
+
+/** 中文译文是纯文本（含 \n 换行、\n- 列表项），转成块级 HTML 再插入。
+ *  必须先 sigEscape 再拼结构 —— 顺序反了就等于把译文当 HTML 解析。 */
+function annZhHtml(text) {
+  return String(text || '').split('\n').map((line) => {
+    const s = line.trim();
+    if (!s) return '';
+    const li = s.match(/^-\s+(.*)$/);
+    if (li) return `<div class="ann-zh-li">${sigEscape(li[1])}</div>`;
+    return `<div class="ann-zh-p">${sigEscape(s)}</div>`;
+  }).join('');
+}
+
+/** 单条公告卡片（中英双语）。
+ *  有译文：中文标题 + 中文正文为主；英文原标题常驻一行小灰字，英文原始正文折叠在按钮后。
+ *  无译文：回退显示英文原文，并标「未翻译」。
+ *  展开阈值分开定：中文按字数（信息密度高），英文按字符数 —— 同一个数字对两者含义差很多。 */
+function annItemHtml(m) {
+  const day = sigDay(m.dateCreated);
+  const theme = m.isTheme === true;
+  const titleZh = String(m.titleZh || '').trim();
+  const descZh = String(m.descZh || '').trim();
+  const hasZh = !!titleZh;
+  const enTitle = String(m.title || '(无标题)');
+  const enHtml = annCleanHtml(m.description || '');
+  const enText = annPlain(enHtml);
+  const noteZh = String(m.noteZh || '').trim();
+
+  const mainTitle = hasZh ? titleZh : enTitle;
+  const mainText = hasZh ? descZh : enText;
+  const short = mainText.length > 0 && mainText.length < (hasZh ? 240 : 200);
+  const bodyHtml = hasZh ? annZhHtml(descZh) : (enText ? enHtml : '');
+
+  return `<article class="ann-item${short ? ' expanded' : ''}" data-ann-id="${sigEscape(m.id || '')}">
+    <div class="ann-item-head">
+      <span class="ann-tag ${theme ? 'ann-tag-theme' : 'ann-tag-other'}">${theme ? '主题' : '公告'}</span>
+      <span class="ann-item-title">${sigEscape(mainTitle)}</span>
+      <span class="ann-item-date" title="美东日期 ${sigEscape(day)}"><span class="ann-date-day">${sigEscape(day)}</span><i>${sigEscape(annAgo(m.dateCreated))}</i></span>
+    </div>
+    <div class="ann-item-title-en${hasZh ? '' : ' ann-untranslated'}">${hasZh
+      ? sigEscape(enTitle)
+      : '未翻译 · 以下为英文原文'}</div>
+    ${bodyHtml ? `<div class="ann-item-body">${bodyHtml}</div>
+      <div class="ann-item-actions">
+        <button class="ann-toggle-body" type="button">${short ? '收起正文' : '展开正文'}</button>
+        ${hasZh && enText ? '<button class="ann-toggle-en" type="button">显示英文原文</button>' : ''}
+      </div>` : ''}
+    ${noteZh ? `<div class="ann-zh-note">※ ${sigEscape(noteZh)}</div>` : ''}
+    ${hasZh && enText ? `<div class="ann-item-en">${enHtml}</div>` : ''}
+  </article>`;
+}
+
+function annFiltered() {
+  let rows = annState.mode === 'all' ? annState.items : annState.items.filter((m) => m.isTheme === true);
+  const kw = annState.keyword.trim().toLowerCase();
+  if (kw) {
+    // 中英双向都搜：用户可能输入「主题」也可能输入 theme / cluster
+    rows = rows.filter((m) => String(m.title || '').toLowerCase().includes(kw)
+      || String(m.titleZh || '').toLowerCase().includes(kw)
+      || annPlain(m.description).toLowerCase().includes(kw)
+      || String(m.descZh || '').toLowerCase().includes(kw));
+  }
+  return rows;   // 服务端已按时间倒序，这里不再排
+}
+
+function annRenderChips() {
+  const box = $('annFilters');
+  if (!box) return;
+  const chips = [
+    { key: 'theme', label: '主题类', n: annState.themeCount },
+    { key: 'all', label: '全部公告', n: annState.total },
+  ];
+  box.innerHTML = chips.map((c) =>
+    `<span class="sig-chip${annState.mode === c.key ? ' active' : ''}" data-mode="${c.key}">`
+    + `${c.label} <span class="sig-chip-count">${c.n}</span></span>`
+  ).join('');
+  box.querySelectorAll('.sig-chip').forEach((el) => {
+    el.addEventListener('click', () => {
+      annState.mode = el.dataset.mode || 'theme';
+      annRender();
+    });
+  });
+}
+
+function annRender() {
+  const list = $('annList');
+  const sub = $('annModalSub');
+  if (!list) return;
+
+  // 接口失败必须和「确实没有公告」分开显示，否则故障会被读成「平台没发公告」
+  if (annState.error) {
+    list.innerHTML = `<div class="ann-empty">读取失败：${sigEscape(annState.error)}</div>`;
+    if (sub) sub.textContent = '读取失败：' + annState.error;
+    const box = $('annFilters');
+    if (box) box.innerHTML = '';
+    return;
+  }
+
+  const rows = annFiltered();
+  annRenderChips();
+
+  list.innerHTML = rows.length
+    ? rows.map(annItemHtml).join('')
+    : `<div class="ann-empty">${annState.items.length
+      ? `没有匹配的公告（当前：${sigEscape(annState.mode === 'all' ? '全部公告' : '主题类')}${annState.keyword ? ' · 关键词「' + sigEscape(annState.keyword) + '」' : ''}）`
+      : 'BRAIN 暂时没有公告'}</div>`;
+
+  list.querySelectorAll('.ann-toggle-body').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const item = btn.closest('.ann-item');
+      if (!item) return;
+      const open = item.classList.toggle('expanded');
+      btn.textContent = open ? '收起正文' : '展开正文';
+    });
+  });
+
+  // 英文原文折叠：中文译文为主，原文按需展开
+  list.querySelectorAll('.ann-toggle-en').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const item = btn.closest('.ann-item');
+      if (!item) return;
+      const open = item.classList.toggle('en-open');
+      btn.textContent = open ? '隐藏英文原文' : '显示英文原文';
+    });
+  });
+
+  if (sub) {
+    const parts = [`主题类 ${annState.themeCount} 条`, `公告总计 ${annState.total} 条`];
+    // 只提示「当前视图里」有多少条没中文，别让用户以为翻译坏了。
+    // 未译数是服务端给的（按 id 是否命中翻译表算），前端不重算规则。
+    const shown = annState.mode === 'all' ? annState.total : annState.themeCount;
+    const shownUntranslated = annState.mode === 'all'
+      ? annState.untranslatedCount
+      : annState.themeUntranslated;
+    if (shownUntranslated > 0) parts.push(`${shownUntranslated}/${shown} 条暂无中文`);
+    if (rows.length !== shown) parts.push(`当前显示 ${rows.length} 条`);
+    if (annState.fetchedAt) {
+      const d = new Date(annState.fetchedAt);
+      if (!Number.isNaN(d.getTime())) parts.push(`拉取于 ${fmtCST(annState.fetchedAt, false).slice(11)}`);
+    }
+    sub.textContent = parts.join('　·　');
+  }
+}
+
+async function annLoad(force = false) {
+  if (annState.loading) return;
+  annState.loading = true;
+  const list = $('annList');
+  if (list && !annState.loaded) list.innerHTML = '<div class="sig-loading">正在读取 BRAIN…</div>';
+  try {
+    const r = await api('/api/announcements' + (force ? '?refresh=1' : ''));
+    annState.items = r.items || [];
+    annState.total = r.total || 0;
+    annState.themeCount = r.theme_count || 0;
+    annState.translatedCount = r.translated_count || 0;
+    annState.untranslatedCount = r.untranslated_count || 0;
+    // 主题类里有多少条没中文 —— 服务端只给全量未译数，主题类视图要单独算
+    const themeItems = annState.items.filter((m) => m.isTheme === true);
+    annState.themeUntranslated = themeItems.filter((m) => !m.translated).length;
+    annState.fetchedAt = r.fetched_at || '';
+    annState.loaded = true;
+    annState.error = null;
+    annUpdateBadge();
+  } catch (e) {
+    annState.error = e.message || String(e);
+  } finally {
+    annState.loading = false;
+    if (!annModal || !annModal.hidden) annRender();
+  }
+}
+
+/** 按钮角标 = 主题类公告条数。加载失败时不改角标，避免把「拉不到」显示成「0 条」。 */
+function annUpdateBadge() {
+  const b = $('annBadge');
+  if (!b) return;
+  b.textContent = String(annState.themeCount);
+  b.hidden = !(annState.themeCount > 0);
+}
+
+function annLoadNote() {
+  const ta = $('annNote');
+  if (!ta) return;
+  try {
+    ta.value = localStorage.getItem(ANN_NOTE_KEY) || '';
+  } catch (e) {
+    ta.value = '';
+  }
+}
+
+let annNoteTimer = null;
+function annSaveNote() {
+  const ta = $('annNote');
+  const st = $('annNoteStatus');
+  if (!ta) return;
+  const n = ta.value.length;
+  try {
+    localStorage.setItem(ANN_NOTE_KEY, ta.value);
+    if (st) {
+      st.textContent = `已保存 · ${n} 字`;
+      st.classList.add('saved');
+    }
+  } catch (e) {
+    if (st) {
+      st.textContent = '保存失败（浏览器禁用了本地存储）';
+      st.classList.remove('saved');
+    }
+  }
+}
+
+async function openAnnModal() {
+  if (!annModal) return;
+  annModal.hidden = false;
+  const card = annModal.querySelector('.osm-modal-card');
+  if (card) card.scrollTop = 0;
+  annLoadNote();
+  if (!annState.loaded || annState.error) {
+    await annLoad();
+  } else {
+    annRender();
+  }
+}
+
+function closeAnnModal() {
+  if (annModal) annModal.hidden = true;
+}
+
+(() => {
+  const btn = $('annBtn');
+  if (btn) btn.addEventListener('click', openAnnModal);
+
+  if (!annModal) return;
+  const closeBtn = $('annModalClose');
+  if (closeBtn) closeBtn.addEventListener('click', closeAnnModal);
+  const backdrop = annModal.querySelector('[data-ann-close]');
+  if (backdrop) backdrop.addEventListener('click', closeAnnModal);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !annModal.hidden) closeAnnModal();
+  });
+
+  const refreshBtn = $('annRefreshBtn');
+  if (refreshBtn) {
+    refreshBtn.addEventListener('click', async () => {
+      if (refreshBtn.disabled) return;
+      const old = refreshBtn.textContent;
+      refreshBtn.disabled = true;
+      refreshBtn.textContent = '同步中…';
+      try {
+        await annLoad(true);
+        if (annState.error) throw new Error(annState.error);
+        toast(`已同步 BRAIN 公告（主题类 ${annState.themeCount} 条）`, '');
+      } catch (e) {
+        toast('同步失败：' + (e.message || e), '');
+      } finally {
+        refreshBtn.disabled = false;
+        refreshBtn.textContent = old;
+      }
+    });
+  }
+
+  const search = $('annSearch');
+  if (search) {
+    search.addEventListener('input', () => {
+      annState.keyword = search.value || '';
+      annRender();
+    });
+  }
+
+  const note = $('annNote');
+  if (note) {
+    note.addEventListener('input', () => {
+      const st = $('annNoteStatus');
+      if (st) { st.textContent = '编辑中…'; st.classList.remove('saved'); }
+      clearTimeout(annNoteTimer);
+      annNoteTimer = setTimeout(annSaveNote, 500);
+    });
+    note.addEventListener('blur', () => {
+      clearTimeout(annNoteTimer);
+      annSaveNote();
+    });
+  }
+
+  // 首页加载后台拉一次，只为把角标数字填上；不阻塞首屏，失败也不弹错
+  setTimeout(() => { if (!annState.loaded) annLoad(); }, 1500);
+})();
+
 // Total Payment 弹窗已抽到 static/pay-modal.js（两页共用一份，260928）
 PayModal.init({ $: $, api: api });
 
